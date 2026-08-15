@@ -1,0 +1,6 @@
+# Runtime dependencies, kept as a plain list for `pip install -r`.
+# ../pyproject.toml is canonical (it also carries requires-python and the dev
+# extra); these lines must not drift from its [project].dependencies.
+pyserial>=3.5
+fastapi>=0.110
+uvicorn>=0.29

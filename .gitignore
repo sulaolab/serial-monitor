@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+# UART logs (default: monitor_logs/ inside this folder) are never committed.
+*.log
+logs/
+monitor_logs/
+.pytest_cache/

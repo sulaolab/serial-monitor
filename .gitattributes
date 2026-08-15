@@ -1,0 +1,6 @@
+# Fleet EOL policy: CRLF in the working tree on every clone.
+#
+# Not cosmetic. The copies this repo replaces differed by exactly 250 bytes --
+# every one of them a CR -- which made two byte-identical files look like two
+# versions of the tool, and cost a round of "which one is newer?".
+* text=auto eol=crlf

@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77"]        # PEP 639: SPDX `license` + `license-files`
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "serial-monitor"
+version = "1.0.0"
+description = "A UART bridge that owns the COM port and serves it to AI agents over HTTP and to humans over raw TCP at the same time"
+readme = "README.md"
+license = "MIT-0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"          # `str | None` at runtime, in every module
+dependencies = [
+    "pyserial>=3.5",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+# Test-only. The suite needs no board: pytest for the runner, httpx because
+# fastapi's TestClient is built on it.
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+# So `serial-monitor --show-config` works from any directory. Installing the
+# package is what makes that true: a sibling checkout is not on sys.path, and
+# `python -m serial_monitor` from a firmware repo fails with No module named
+# serial_monitor unless you are standing in this repo (or set PYTHONPATH).
+serial-monitor = "serial_monitor.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/sulaolab/serial-monitor"
+
+[tool.setuptools]
+# The PowerShell launchers and profiles/ live at the repo root and are used from a
+# checkout, not from site-packages; only the importable package is installed.
+packages = ["serial_monitor"]
+
+[tool.pytest.ini_options]
+testpaths = ["serial_monitor/tests"]

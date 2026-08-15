@@ -1,0 +1,56 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    # Windows only, deliberately: the launchers are PowerShell and port
+    # enumeration is CIM, so this is the platform the tool is used on. The
+    # importable package has nothing Windows-specific in it, but claiming Linux
+    # support in CI without anyone running it there would be a claim, not a test.
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (editable, with the test extra)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Tests -- no board, no COM port needed
+        run: python -m pytest -q
+
+      - name: The console script resolves from any directory
+        # The whole reason packaging exists here: a sibling checkout is not on
+        # sys.path, so `python -m serial_monitor` from a firmware repo fails.
+        run: |
+          cd ..
+          serial-monitor --version
+
+      - name: The PowerShell launchers must parse
+        shell: pwsh
+        run: |
+          $bad = 0
+          Get-ChildItem *.ps1 | ForEach-Object {
+              $errs = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                  $_.FullName, [ref]$null, [ref]$errs)
+              if ($errs) {
+                  $bad++
+                  Write-Host "::error file=$($_.Name)::$($errs[0].Message)"
+              }
+          }
+          exit $bad
