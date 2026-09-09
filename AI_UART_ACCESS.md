@@ -148,7 +148,7 @@ which board owns which alias is a property of this PC's profiles, so ask for it:
 `start-serial-monitor.ps1 -Help` prints every profile with its bind, and
 `--show-config` prints the one your directory resolves to. The profiles that exist
 today are `sonora` (`127.0.0.1`), `ck` (`127.0.0.5`), `nano` (`127.0.0.6`),
-`eval92m` (`127.0.0.31`) and `eval92s` (`127.0.0.32`) — see
+`samha` (`127.0.0.7`), `eval92m` (`127.0.0.31`) and `eval92s` (`127.0.0.32`) — see
 `docs/binding-and-profiles.md`.
 
 Then **confirm with `GET /status` that `profile` and `port` are the board you

@@ -5,8 +5,8 @@ alias its monitor binds to, its baud, and — as documentation — the USB vendo
 that board's debugger uses.
 
 Every monitor on one PC wants port 8080, so they are separated by address:
-`sonora` on `127.0.0.1`, `ck` on `127.0.0.5`, `nano` on `127.0.0.6`, `eval92m` on
-`127.0.0.31`, `eval92s` on `127.0.0.32`. All are loopback (`127.0.0.0/8` is
+`sonora` on `127.0.0.1`, `ck` on `127.0.0.5`, `nano` on `127.0.0.6`, `samha` on
+`127.0.0.7`, `eval92m` on `127.0.0.31`, `eval92s` on `127.0.0.32`. All are loopback (`127.0.0.0/8` is
 entirely local, no OS setup needed).
 
 ## A profile may also live outside this checkout
