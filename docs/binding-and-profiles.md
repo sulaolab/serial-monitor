@@ -11,6 +11,7 @@ instead:
 | `sonora` | `127.0.0.1:8080` / `:23` | dsPIC33AK board (PKOB4 CDC, VID_04D8) |
 | `ck` | `127.0.0.5:8080` / `:23` | dsPIC33CK kit (Curiosity Nano nEDBG, VID_03EB) |
 | `nano` | `127.0.0.6:8080` / `:23` | another Curiosity Nano |
+| `samha` | `127.0.0.7:8080` / `:23` | SAM HA1G16A Xplained Pro (EDBG, VID_03EB) |
 | `eval92m` | `127.0.0.31:8080` / `:23` | EVAL92 pair, `m` unit (no VID filter) |
 | `eval92s` | `127.0.0.32:8080` / `:23` | EVAL92 pair, `s` unit (no VID filter) |
 
