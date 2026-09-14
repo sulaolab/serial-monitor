@@ -171,7 +171,7 @@ which is privileged on Unix; pass `--tcp-port 2300` (or any high port) there.
 python -m venv .venv; .\.venv\Scripts\Activate.ps1   # optional but tidy
 pip install -e .                                     # or: pip install -e ".[dev]" to run the tests
 
-.\list-serial-monitor.ps1                  # show COM ports + any running monitor
+ .\list-serial-monitor.ps1                  # show COM ports + every running configured monitor
 .\start-serial-monitor.ps1 -Port COM12     # name the port -- nothing is auto-picked
 .\start-serial-monitor.ps1                 # no -Port: the list is shown and you are asked
 .\stop-serial-monitor.ps1

@@ -11,10 +11,12 @@
          Each port's USB vendor ID is shown so you can tell the boards apart.
          Nothing is marked as recommended: see the note by $VidLabels.
 
-      2. Monitor status -- queried over the localhost HTTP API (GET /status on
-         -HttpPort). Shows whether the serial monitor bridge is running, which
-         port/baud it currently holds, and whether the UART is connected. If it
-         is running, the COM port it owns is flagged "<== monitor" in the list.
+      2. Monitor status -- queried over the localhost HTTP API (GET /status).
+         When run directly, every configured profile is checked so a monitor on
+         another loopback alias is not hidden by this directory's fallback
+         profile.  An explicit -HttpHost or -HttpPort keeps the historical
+         single-bind view used by start-serial-monitor.ps1.  A running monitor's
+         COM port is flagged "<== monitor" in the list.
 
     Run directly to see both. When called from another script it returns the
     port PSCustomObjects (Index, Port, Description, Manufacturer, Vid,
@@ -22,7 +24,8 @@
 
 .EXAMPLE
     .\list-serial-monitor.ps1
-    Show the COM port list and the current monitor status.
+    Show the COM port list and every running monitor declared by the configured
+    profiles.
 
 .EXAMPLE
     $ports = .\list-serial-monitor.ps1 -Quiet
@@ -45,19 +48,70 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# --- probe the running monitor (localhost HTTP API; never opens a COM port) ---
+# --- probe running monitors (localhost HTTP API; never opens a COM port) ------
 function Get-MonitorStatus {
-    param([int]$Port)
-    $uri = "http://$HttpHost`:$Port/status"
+    param(
+        [string]$Address,
+        [int]$Port,
+        [string]$ConfiguredProfile
+    )
+    $uri = "http://$Address`:$Port/status"
     try {
-        return Invoke-RestMethod -Uri $uri -TimeoutSec 2 -ErrorAction Stop
+        $status = Invoke-RestMethod -Uri $uri -TimeoutSec 2 -ErrorAction Stop
+        return [pscustomobject]@{
+            HttpHost = $Address
+            HttpPort = $Port
+            ConfiguredProfile = $ConfiguredProfile
+            Status = $status
+        }
     }
     catch {
         return $null
     }
 }
 
-$monitor = Get-MonitorStatus -Port $HttpPort
+function Get-ConfiguredMonitorEndpoints {
+    # Let config.py own profile discovery and precedence.  In particular, this
+    # includes $SERIAL_MONITOR_PROFILES and .serial-monitor-profiles next to the
+    # checkout; hard-coding 127.0.0.1/.5/.6 here would immediately go stale.
+    Push-Location $PSScriptRoot
+    try {
+        $profileListJson = & python -m serial_monitor.config --list-profiles 2>$null | Out-String
+        $profileList = $profileListJson | ConvertFrom-Json
+        foreach ($profile in @($profileList.profiles)) {
+            $cfgJson = & python -m serial_monitor.config --profile $profile --no-project-config 2>$null | Out-String
+            $cfg = $cfgJson | ConvertFrom-Json
+            if (-not ($cfg.PSObject.Properties.Name -contains 'error')) {
+                [pscustomobject]@{
+                    Profile = [string]$profile
+                    HttpHost = [string]$cfg.http_host
+                    HttpPort = [int]$cfg.http_port
+                }
+            }
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+# No bind arguments means the human ran this script directly.  Scan configured
+# profiles in that case; launcher callers always pass their resolved bind and
+# therefore retain a focused one-monitor result.
+$scanAllConfiguredMonitors = (-not $PSBoundParameters.ContainsKey('HttpHost')) -and
+                             (-not $PSBoundParameters.ContainsKey('HttpPort'))
+if ($scanAllConfiguredMonitors) {
+    $monitorEndpoints = @(Get-ConfiguredMonitorEndpoints | Sort-Object HttpHost, HttpPort -Unique)
+} else {
+    $monitorEndpoints = @([pscustomobject]@{ Profile = $null; HttpHost = $HttpHost; HttpPort = $HttpPort })
+}
+
+$monitors = @(
+    foreach ($endpoint in $monitorEndpoints) {
+        $result = Get-MonitorStatus -Address $endpoint.HttpHost -Port $endpoint.HttpPort -ConfiguredProfile $endpoint.Profile
+        if ($null -ne $result) { $result }
+    }
+)
 
 # --- enumerate COM ports from PnP (metadata only; does not open the port) ---
 $entities = @(
@@ -122,7 +176,13 @@ if (-not [string]::IsNullOrWhiteSpace($Vid)) {
     $ports = @($ports | Where-Object { $_.Vid -eq $wantVid })
 }
 
-$heldPort = if ($null -ne $monitor) { [string]$monitor.port } else { $null }
+$heldByPort = @{}
+foreach ($runningMonitor in $monitors) {
+    $heldPort = [string]$runningMonitor.Status.port
+    if (-not [string]::IsNullOrWhiteSpace($heldPort)) {
+        $heldByPort[$heldPort] = $runningMonitor
+    }
+}
 
 <#
   A monitor holding a port that no longer exists in the PnP list is the failure
@@ -138,56 +198,81 @@ $heldPort = if ($null -ne $monitor) { [string]$monitor.port } else { $null }
   refuses to do (a mark that is right by coincidence is indistinguishable from one
   that is right by reason).
 #>
-$heldPortMissing = ($null -ne $heldPort) -and
-                   ($heldPort -ne '') -and
-                   (-not ($allPorts | Where-Object { $_.Port -eq $heldPort }))
+$missingPortMonitors = @(
+    $monitors | Where-Object {
+        $heldPort = [string]$_.Status.port
+        (-not [string]::IsNullOrWhiteSpace($heldPort)) -and
+        (-not ($allPorts | Where-Object { $_.Port -eq $heldPort }))
+    }
+)
 
 # Present, but hidden from this view by -Vid. Worth one line: otherwise the list
 # has no "<== monitor" mark and the reader is left wondering.
-$heldPortFiltered = ($null -ne $heldPort) -and
-                    ($heldPort -ne '') -and
-                    (-not $heldPortMissing) -and
-                    (-not ($ports | Where-Object { $_.Port -eq $heldPort }))
+$filteredPortMonitors = @(
+    $monitors | Where-Object {
+        $heldPort = [string]$_.Status.port
+        (-not [string]::IsNullOrWhiteSpace($heldPort)) -and
+        (-not ($missingPortMonitors -contains $_)) -and
+        (-not ($ports | Where-Object { $_.Port -eq $heldPort }))
+    }
+)
 
 $i = 0
 foreach ($p in $ports) {
     $i++
     Add-Member -InputObject $p -NotePropertyName Index -NotePropertyValue $i -Force
-    Add-Member -InputObject $p -NotePropertyName HeldByMonitor -NotePropertyValue ($p.Port -eq $heldPort) -Force
+    Add-Member -InputObject $p -NotePropertyName HeldByMonitor -NotePropertyValue $heldByPort.ContainsKey($p.Port) -Force
 }
 
 if (-not $Quiet) {
     # --- monitor status block ---
     Write-Host ""
-    if ($null -ne $monitor) {
-        if ($heldPortMissing) {
-            $conn = 'STALE / PORT MISSING'
-            $connColor = 'Red'
-        } elseif ($monitor.connected) {
-            $conn = 'CONNECTED'
-            $connColor = 'Green'
-        } else {
-            $conn = 'not connected'
-            $connColor = 'Yellow'
-        }
-        Write-Host "Serial Monitor: RUNNING" -ForegroundColor Green -NoNewline
-        Write-Host ("  (http://{0}:{1})" -f $HttpHost, $HttpPort) -ForegroundColor DarkGray
-        Write-Host ("  UART {0} @ {1}  [{2}]" -f $monitor.port, $monitor.baud, $conn) -ForegroundColor $connColor
-        if ($heldPortMissing) {
-            Write-Host ("  {0} is NOT in the current PnP port list -- the monitor is holding a dead handle." -f $monitor.port) -ForegroundColor Red
-            Write-Host "  The board most likely re-enumerated to a different COM number (USB reconnect)." -ForegroundColor Red
-            Write-Host "  /status will keep saying connected while delivering garbage or nothing at all." -ForegroundColor Red
-            Write-Host "  Restart it on the right port: .\stop-serial-monitor.ps1 then .\start-serial-monitor.ps1 -Port <COMn>" -ForegroundColor Red
-        }
-        if ($heldPortFiltered) {
-            Write-Host ("  {0} exists but is hidden from the list below by -Vid {1} -- your filter, not a fault." -f $monitor.port, $Vid.ToUpper()) -ForegroundColor DarkGray
-        }
-        if ($monitor.log_file) {
-            Write-Host ("  log: {0}" -f $monitor.log_file) -ForegroundColor DarkGray
+    if ($monitors.Count -gt 0) {
+        $heading = if ($scanAllConfiguredMonitors) { 'Serial Monitors: RUNNING' } else { 'Serial Monitor: RUNNING' }
+        Write-Host $heading -ForegroundColor Green
+        foreach ($runningMonitor in $monitors) {
+            $status = $runningMonitor.Status
+            $profileLabel = if (-not [string]::IsNullOrWhiteSpace([string]$status.profile)) {
+                [string]$status.profile
+            } elseif (-not [string]::IsNullOrWhiteSpace([string]$runningMonitor.ConfiguredProfile)) {
+                [string]$runningMonitor.ConfiguredProfile
+            } else {
+                'unknown profile'
+            }
+            $heldPort = [string]$status.port
+            $heldPortMissing = $missingPortMonitors -contains $runningMonitor
+            if ($heldPortMissing) {
+                $conn = 'STALE / PORT MISSING'
+                $connColor = 'Red'
+            } elseif ($status.connected) {
+                $conn = 'CONNECTED'
+                $connColor = 'Green'
+            } else {
+                $conn = 'not connected'
+                $connColor = 'Yellow'
+            }
+            Write-Host ("  {0}  (http://{1}:{2})" -f $profileLabel, $runningMonitor.HttpHost, $runningMonitor.HttpPort) -ForegroundColor DarkGray
+            Write-Host ("    UART {0} @ {1}  [{2}]" -f $heldPort, $status.baud, $conn) -ForegroundColor $connColor
+            if ($heldPortMissing) {
+                Write-Host ("    {0} is NOT in the current PnP port list -- the monitor is holding a dead handle." -f $heldPort) -ForegroundColor Red
+                Write-Host "    The board most likely re-enumerated to a different COM number (USB reconnect)." -ForegroundColor Red
+                Write-Host "    /status will keep saying connected while delivering garbage or nothing at all." -ForegroundColor Red
+                Write-Host "    Restart it on the right port: .\stop-serial-monitor.ps1 then .\start-serial-monitor.ps1 -Port <COMn>" -ForegroundColor Red
+            }
+            if ($filteredPortMonitors -contains $runningMonitor) {
+                Write-Host ("    {0} exists but is hidden from the list below by -Vid {1} -- your filter, not a fault." -f $heldPort, $Vid.ToUpper()) -ForegroundColor DarkGray
+            }
+            if ($status.log_file) {
+                Write-Host ("    log: {0}" -f $status.log_file) -ForegroundColor DarkGray
+            }
         }
     }
     else {
-        Write-Host ("Serial Monitor: not running (no response on http://{0}:{1})" -f $HttpHost, $HttpPort) -ForegroundColor DarkGray
+        if ($scanAllConfiguredMonitors) {
+            Write-Host 'Serial Monitors: not running (no configured profile bind responded)' -ForegroundColor DarkGray
+        } else {
+            Write-Host ("Serial Monitor: not running (no response on http://{0}:{1})" -f $HttpHost, $HttpPort) -ForegroundColor DarkGray
+        }
     }
 
     # --- COM port list ---
@@ -200,8 +285,10 @@ if (-not $Quiet) {
         foreach ($p in $ports) {
             $mfg = if ([string]::IsNullOrWhiteSpace($p.Manufacturer)) { '' } else { "  [$($p.Manufacturer)]" }
             $held = if ($p.HeldByMonitor) {
-                if ($monitor.tcp -and $monitor.tcp.host -and $monitor.tcp.port) {
-                    "   <== monitor {0}:{1}" -f $monitor.tcp.host, $monitor.tcp.port
+                $owner = $heldByPort[$p.Port]
+                $ownerProfile = if ($owner.Status.profile) { [string]$owner.Status.profile } elseif ($owner.ConfiguredProfile) { [string]$owner.ConfiguredProfile } else { 'unknown profile' }
+                if ($owner.Status.tcp -and $owner.Status.tcp.host -and $owner.Status.tcp.port) {
+                    "   <== monitor {0} {1}:{2}" -f $ownerProfile, $owner.Status.tcp.host, $owner.Status.tcp.port
                 } else {
                     # HeldByMonitor is true here, so the monitor genuinely holds this
                     # port -- the missing piece is the TCP tail address, not the

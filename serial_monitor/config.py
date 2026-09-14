@@ -278,9 +278,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--start-dir", default=None, help="Directory to search upward from (default cwd)")
     p.add_argument("--profile", default=None, help=f"Named profile: {', '.join(available_profiles()) or '(none)'}")
+    p.add_argument("--list-profiles", action="store_true", help="Print every reachable profile name as JSON and exit")
     p.add_argument("--no-project-config", action="store_true", help=f"Ignore any {PROJECT_CONFIG_NAME}")
     p.add_argument("--with-sources", action="store_true", help="Also report where each value came from")
     args = p.parse_args(argv)
+
+    if args.list_profiles:
+        print(json.dumps({"profiles": available_profiles()}))
+        return 0
 
     try:
         values, sources = resolve(

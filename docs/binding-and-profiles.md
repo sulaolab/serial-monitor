@@ -182,8 +182,8 @@ uncommitted changes. Change `serial-monitor` from one session at a time.
 
 **The base URL is not a constant.** Do not assume `127.0.0.1:8080`. Either
 
-- run `list-serial-monitor.ps1` (it reports whether a monitor is up on the bind it
-  resolved for your directory), or
+- run `list-serial-monitor.ps1` directly (it reports every running monitor in the
+  configured profiles), or
 - run `python -m serial_monitor --show-config` to see the bind for the repo you
   are working in,
 

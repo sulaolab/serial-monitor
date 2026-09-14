@@ -142,8 +142,9 @@ pwsh ../serial-monitor/start-serial-monitor.ps1 -List
 # Profile 'ck'  ->  bind 127.0.0.5  (from: profile:ck)   -- then it exits
 ```
 
-Or run `list-serial-monitor.ps1`, which reports whether a monitor is up on the
-bind resolved for your directory. **Do not carry an alias table in your head** —
+Or run `list-serial-monitor.ps1` directly, which reports every running monitor
+declared by the configured profiles.  When a launcher calls it with an explicit
+bind, it reports only that bind. **Do not carry an alias table in your head** —
 which board owns which alias is a property of this PC's profiles, so ask for it:
 `start-serial-monitor.ps1 -Help` prints every profile with its bind, and
 `--show-config` prints the one your directory resolves to. The profiles that exist
