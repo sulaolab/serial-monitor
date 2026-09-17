@@ -169,7 +169,19 @@ $allPorts = $ports
   profile decides the bind address; it deliberately does not decide the COM port,
   because port numbers move when a board is re-plugged.
 #>
-$VidLabels = @{ '03EB' = 'Curiosity Nano (nEDBG CDC)'; '04D8' = 'Microchip PKOB4 / MCP serial' }
+<#
+  This table is knowledge, not a filter: every COM port is listed whether or not
+  its VID appears here. A VID that is missing from the table is called out as
+  UNKNOWN in the list rather than printed bare, because a bare "VID_1234" line
+  reads like "nothing to see here" and hides the one port the caller is hunting
+  for. Add the row when you identify a device; do not add a recommendation.
+#>
+$VidLabels = @{
+    '03EB' = 'Atmel/Microchip nEDBG - Curiosity Nano CDC'
+    '04D8' = 'Microchip PKOB4 / MCP serial'
+    '0403' = 'FTDI USB-serial bridge'
+    '10C4' = 'Silicon Labs CP210x USB-serial bridge'
+}
 
 if (-not [string]::IsNullOrWhiteSpace($Vid)) {
     $wantVid = $Vid.ToUpper()
@@ -299,8 +311,17 @@ if (-not $Quiet) {
             Write-Host ("  {0}) {1,-6} {2}{3}{4}" -f $p.Index, $p.Port, $p.Description, $mfg, $held) -ForegroundColor Gray
             # The VID is the only reliable way to tell these boards apart -- show it
             # on its own line rather than making the reader trust the display name.
-            $vidText = if ($p.Vid) { "VID_$($p.Vid)" } else { 'VID unknown' }
-            $vidNote = if ($p.Vid -and $VidLabels.ContainsKey($p.Vid)) { " = $($VidLabels[$p.Vid])" } else { '' }
+            $vidText = if ($p.Vid) { "VID_$($p.Vid)" } else { 'VID unreadable (not a USB device ID)' }
+            # An unrecognised device is still a device. Say so out loud: silence on
+            # this line is indistinguishable from "this port does not matter", and
+            # that is exactly the port a bring-up is looking for.
+            $vidNote = if (-not $p.Vid) {
+                ' = [UNKNOWN - no VID in the PnP device ID; on-board / non-USB port?]'
+            } elseif ($VidLabels.ContainsKey($p.Vid)) {
+                " = $($VidLabels[$p.Vid])"
+            } else {
+                ' = [UNKNOWN VID - not in this script''s device table; add it]'
+            }
             # The PID is printed as well as the VID, and for a reason: a board can
             # expose two CDC ports that share one VID, in which case only the PID
             # separates them -- and one of the two may carry a mirror of the other's
@@ -312,6 +333,8 @@ if (-not $Quiet) {
         Write-Host "No port is recommended: this script cannot know which board you mean." -ForegroundColor DarkGray
         Write-Host "Choose by number, or pass -Port COM<n>. VID_03EB = Curiosity Nano, VID_04D8 = PKOB4." -ForegroundColor DarkGray
         Write-Host "If one VID appears twice, the two ports are not interchangeable: check the PID." -ForegroundColor DarkGray
+        Write-Host "This list is what Windows currently enumerates. A board that is unplugged," -ForegroundColor DarkGray
+        Write-Host "unpowered, or whose debugger has dropped off the USB bus is ABSENT, not UNKNOWN." -ForegroundColor DarkGray
     }
     Write-Host ""
 }
