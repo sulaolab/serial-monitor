@@ -157,14 +157,16 @@ Two things needed fixing for this to be true, and both are done:
 Names would not have collided anyway, but one flat directory mixing every board's
 console is a bad place to look for evidence later.
 
-**Stopping refuses to guess.** `stop-serial-monitor.ps1` used to kill every
-`serial_monitor` process it found, and `-HttpPort 8080` did not narrow anything
-(instances differ by *alias*, not port). With several boards live that takes out
-another session's work mid-command -- which is exactly what happened on
-2026-08-09. It now lists the matches and stops nothing unless you name one:
+**Stopping requires an explicit choice.** `stop-serial-monitor.ps1` used to kill
+every `serial_monitor` process it found, and `-HttpPort 8080` did not narrow
+anything (instances differ by *alias*, not port). With several boards live that
+takes out another session's work mid-command -- which is exactly what happened on
+2026-08-09. It now lists numbered matches and, when run from an interactive
+terminal, asks which one to stop. Blank or invalid input cancels; redirected
+standard input still stops nothing. You can always name one explicitly instead:
 
 ```powershell
-.\stop-serial-monitor.ps1                 # 2 running -> lists them, exits 1, kills nothing
+.\stop-serial-monitor.ps1                 # 2 running -> lists numbered entries and asks which to stop
 .\stop-serial-monitor.ps1 -Profile ck      # exactly the CK board's monitor
 .\stop-serial-monitor.ps1 -HttpHost 127.0.0.5
 .\stop-serial-monitor.ps1 -Port COM60

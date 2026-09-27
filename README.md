@@ -148,8 +148,10 @@ One install serves every board and every session at once: processes are
 independent, the OS arbitrates the COM port, bind clashes are refused before the
 port is opened, and logs are namespaced per profile
 (`monitor_logs/<profile>/`). Stopping never guesses — with more than one monitor
-running, `stop-serial-monitor.ps1` lists them and stops nothing until you name one
-with `-Profile` / `-HttpHost` / `-Port` (or `-All`).
+running, `stop-serial-monitor.ps1` lists numbered entries and, at an interactive
+terminal, asks which one to stop. You can instead name one with `-Profile` /
+`-HttpHost` / `-Port` (or use `-All`). Redirected input remains fail-closed and
+stops nothing.
 
 Full rules: [`docs/binding-and-profiles.md`](docs/binding-and-profiles.md).
 

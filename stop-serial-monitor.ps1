@@ -20,8 +20,10 @@
     killing "all of them" would take out someone else's board mid-command. That is
     not hypothetical: it happened on 2026-08-09.
 
-    Say which one you mean with -Profile / -HttpHost / -Port, or -All when you
-    really do want every instance gone.
+    Say which one you mean with -Profile / -HttpHost / -Port, select a numbered
+    entry at the interactive prompt, or use -All when you really do want every
+    instance gone.  The prompt is disabled when standard input is redirected,
+    so automation still refuses ambiguous stops.
 
     Note that -HttpPort alone usually does NOT narrow anything: instances are
     separated by loopback alias (127.0.0.1 vs 127.0.0.5), and they all use 8080.
@@ -52,8 +54,9 @@
 
 .EXAMPLE
     .\stop-serial-monitor.ps1
-    With one instance running, stops it. With several, lists them and stops
-    nothing.
+    With one instance running, stops it. With several in an interactive
+    terminal, lists numbered entries and asks which one to stop. Blank or
+    invalid input cancels; redirected input stops nothing.
 
 .EXAMPLE
     .\stop-serial-monitor.ps1 -All
@@ -118,22 +121,43 @@ if ($procs.Count -eq 0) {
     exit 0
 }
 
-# --- refuse to guess when several match --------------------------------------
+# --- require an explicit choice when several match ---------------------------
 if ($procs.Count -gt 1 -and -not $All) {
-    Write-Host ("{0} monitors match{1} -- stopping nothing." -f $procs.Count,
+    Write-Host ("{0} monitors match{1} -- select one to stop." -f $procs.Count,
         $(if ($filters.Count) { " " + ($filters -join ' ') } else { '' })) -ForegroundColor Yellow
-    foreach ($p in $procs) {
+    for ($i = 0; $i -lt $procs.Count; $i++) {
+        $p = $procs[$i]
         $name = if ($p.CommandLine -match '--name\s+(\S+)') { $Matches[1] } else { '?' }
         $com = if ($p.CommandLine -match '--port\s+(\S+)') { $Matches[1] } else { '?' }
         $bind = if ($p.CommandLine -match '--http-host\s+(\S+)') { $Matches[1] } else { '?' }
         $hp = if ($p.CommandLine -match '--http-port\s+(\S+)') { $Matches[1] } else { '?' }
-        Write-Host ("  pid {0,-6} profile={1,-8} uart={2,-6} bind={3}:{4}" -f $p.ProcessId, $name, $com, $bind, $hp)
+        Write-Host ("  [{0}] pid {1,-6} profile={2,-8} uart={3,-6} bind={4}:{5}" -f ($i + 1), $p.ProcessId, $name, $com, $bind, $hp)
     }
     Write-Host ""
     Write-Host "Another session is probably using one of these. Name the one you mean:" -ForegroundColor DarkGray
     Write-Host "  .\stop-serial-monitor.ps1 -Profile <name>   (or -HttpHost / -Port)" -ForegroundColor DarkGray
     Write-Host "  .\stop-serial-monitor.ps1 -All              (every instance, if you are sure)" -ForegroundColor DarkGray
-    exit 1
+
+    # Non-interactive callers must keep the old fail-closed behavior: input
+    # supplied through a pipe or redirected file is not a human's selection.
+    if ([Console]::IsInputRedirected) {
+        Write-Host "Standard input is redirected; stopping nothing." -ForegroundColor DarkGray
+        exit 1
+    }
+
+    $answer = Read-Host "Select monitor number to stop (blank cancels)"
+    [int]$selectedIndex = 0
+    if ([string]::IsNullOrWhiteSpace($answer)) {
+        Write-Host "No selection; stopping nothing." -ForegroundColor Yellow
+        exit 1
+    }
+    if (-not [int]::TryParse($answer, [ref]$selectedIndex) -or
+        $selectedIndex -lt 1 -or $selectedIndex -gt $procs.Count) {
+        Write-Host ("Invalid monitor number '{0}'; stopping nothing." -f $answer) -ForegroundColor Yellow
+        exit 1
+    }
+
+    $procs = @($procs[$selectedIndex - 1])
 }
 
 $stopped = 0
