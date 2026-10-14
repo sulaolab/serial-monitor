@@ -12,11 +12,11 @@
          Nothing is marked as recommended: see the note by $VidLabels.
 
       2. Monitor status -- queried over the localhost HTTP API (GET /status).
-         When run directly, every configured profile is checked so a monitor on
-         another loopback alias is not hidden by this directory's fallback
-         profile.  An explicit -HttpHost or -HttpPort keeps the historical
-         single-bind view used by start-serial-monitor.ps1.  A running monitor's
-         COM port is flagged "<== monitor" in the list.
+         When run directly, endpoints are read from running monitor process
+         command lines. This finds COM-derived and old fixed-bind monitors, and
+         keeps dead/re-enumerated COM handles visible during migration without
+         waiting on one HTTP timeout per unused COM port. An explicit -HttpHost
+         or -HttpPort keeps a focused single-bind view.
 
     Run directly to see both. When called from another script it returns the
     port PSCustomObjects (Index, Port, Description, Manufacturer, Vid,
@@ -24,12 +24,16 @@
 
 .EXAMPLE
     .\list-serial-monitor.ps1
-    Show the COM port list and every running monitor declared by the configured
-    profiles.
+    Show the COM port list and every running monitor found on the derived binds.
 
 .EXAMPLE
     $ports = .\list-serial-monitor.ps1 -Quiet
     Get the port objects without printing (used by start-serial-monitor.ps1).
+
+    .EXAMPLE
+    $inventory = .\list-serial-monitor.ps1 -Json | ConvertFrom-Json
+    Get a stable machine-readable inventory. Consumers must select exactly one
+    monitor whose profile matches the board they intend to drive.
 #>
 [CmdletBinding()]
 param(
@@ -43,7 +47,12 @@ param(
     [string]$Vid,
 
     # Return the port objects only; do not print the human-readable output.
-    [switch]$Quiet
+    [switch]$Quiet,
+
+    # Emit one JSON document containing the responding monitors and current COM
+    # inventory. This is the supported automation interface; unlike the human
+    # table, its property names are stable. Implies no human-readable output.
+    [switch]$Json
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,48 +79,36 @@ function Get-MonitorStatus {
     }
 }
 
-function Get-ConfiguredMonitorEndpoints {
-    # Let config.py own profile discovery and precedence.  In particular, this
-    # includes $SERIAL_MONITOR_PROFILES and .serial-monitor-profiles next to the
-    # checkout; hard-coding 127.0.0.1/.5/.6 here would immediately go stale.
-    Push-Location $PSScriptRoot
-    try {
-        $profileListJson = & python -m serial_monitor.config --list-profiles 2>$null | Out-String
-        $profileList = $profileListJson | ConvertFrom-Json
-        foreach ($profile in @($profileList.profiles)) {
-            $cfgJson = & python -m serial_monitor.config --profile $profile --no-project-config 2>$null | Out-String
-            $cfg = $cfgJson | ConvertFrom-Json
-            if (-not ($cfg.PSObject.Properties.Name -contains 'error')) {
-                [pscustomobject]@{
-                    Profile = [string]$profile
-                    HttpHost = [string]$cfg.http_host
-                    HttpPort = [int]$cfg.http_port
-                }
+function Get-RunningMonitorEndpoints {
+    # The stop helper already treats the command line as the authority for a
+    # running monitor. Reuse the same narrow process signature here: it finds
+    # legacy fixed-bind processes as well as COM-derived ones, without probing
+    # every address in 127/8.
+    $moduleRun = '(?:^|\s)-m\s+serial_monitor(?:\s|$)'
+    $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -match $moduleRun -and $_.Name -match 'python' })
+    foreach ($process in $processes) {
+        $cmd = [string]$process.CommandLine
+        $httpAddress = $null
+        if ($cmd -match '--http-host\s+(\S+)') {
+            $httpAddress = $Matches[1].Trim('"')
+        } elseif ($cmd -match '--port\s+"?COM(\d+)"?(?:\s|$)') {
+            # A direct `python -m serial_monitor --port COM<n>` launch has no
+            # explicit host in its process command line; the Python CLI derives
+            # the same address after parsing. Mirror only that deterministic rule.
+            $comNumber = [int]$Matches[1]
+            if ($comNumber -ge 1 -and $comNumber -le 254) {
+                $httpAddress = "127.0.0.$comNumber"
             }
         }
-    }
-    finally {
-        Pop-Location
+        if ([string]::IsNullOrWhiteSpace($httpAddress)) { continue }
+        $port = 8080
+        if ($cmd -match '--http-port\s+(\d+)') { $port = [int]$Matches[1] }
+        $name = $null
+        if ($cmd -match '--name\s+(\S+)') { $name = $Matches[1].Trim('"') }
+        [pscustomobject]@{ Profile = $name; HttpHost = $httpAddress; HttpPort = $port }
     }
 }
-
-# No bind arguments means the human ran this script directly.  Scan configured
-# profiles in that case; launcher callers always pass their resolved bind and
-# therefore retain a focused one-monitor result.
-$scanAllConfiguredMonitors = (-not $PSBoundParameters.ContainsKey('HttpHost')) -and
-                             (-not $PSBoundParameters.ContainsKey('HttpPort'))
-if ($scanAllConfiguredMonitors) {
-    $monitorEndpoints = @(Get-ConfiguredMonitorEndpoints | Sort-Object HttpHost, HttpPort -Unique)
-} else {
-    $monitorEndpoints = @([pscustomobject]@{ Profile = $null; HttpHost = $HttpHost; HttpPort = $HttpPort })
-}
-
-$monitors = @(
-    foreach ($endpoint in $monitorEndpoints) {
-        $result = Get-MonitorStatus -Address $endpoint.HttpHost -Port $endpoint.HttpPort -ConfiguredProfile $endpoint.Profile
-        if ($null -ne $result) { $result }
-    }
-)
 
 # --- enumerate COM ports from PnP (metadata only; does not open the port) ---
 $entities = @(
@@ -148,6 +145,22 @@ $ports = @($ports | Sort-Object Num)
 # gone whenever the filter excluded it (see $heldPortMissing below).
 $allPorts = $ports
 
+# --- probe running monitors (localhost HTTP API; never opens a COM port) ------
+$scanAllMonitors = (-not $PSBoundParameters.ContainsKey('HttpHost')) -and
+                   (-not $PSBoundParameters.ContainsKey('HttpPort'))
+if ($scanAllMonitors) {
+    $monitorEndpoints = @(Get-RunningMonitorEndpoints | Sort-Object HttpHost, HttpPort -Unique)
+} else {
+    $monitorEndpoints = @([pscustomobject]@{ Profile = $null; HttpHost = $HttpHost; HttpPort = $HttpPort })
+}
+
+$monitors = @(
+    foreach ($endpoint in $monitorEndpoints) {
+        $result = Get-MonitorStatus -Address $endpoint.HttpHost -Port $endpoint.HttpPort -ConfiguredProfile $endpoint.Profile
+        if ($null -ne $result) { $result }
+    }
+)
+
 <#
   This script does NOT recommend a port. It labels each one by USB vendor ID and
   stops there.
@@ -166,8 +179,8 @@ $allPorts = $ports
   from one that is right by reason, so there is no mark.
 
   Which board you want is stated by -Port (or -Vid to narrow the list). The
-  profile decides the bind address; it deliberately does not decide the COM port,
-  because port numbers move when a board is re-plugged.
+  selected COM port decides the bind address. The profile names the board but
+  deliberately does not decide the COM port, because numbers move on re-plug.
 #>
 <#
   This table is knowledge, not a filter: every COM port is listed whether or not
@@ -236,11 +249,11 @@ foreach ($p in $ports) {
     Add-Member -InputObject $p -NotePropertyName HeldByMonitor -NotePropertyValue $heldByPort.ContainsKey($p.Port) -Force
 }
 
-if (-not $Quiet) {
+if (-not $Quiet -and -not $Json) {
     # --- monitor status block ---
     Write-Host ""
     if ($monitors.Count -gt 0) {
-        $heading = if ($scanAllConfiguredMonitors) { 'Serial Monitors: RUNNING' } else { 'Serial Monitor: RUNNING' }
+        $heading = if ($scanAllMonitors) { 'Serial Monitors: RUNNING' } else { 'Serial Monitor: RUNNING' }
         Write-Host $heading -ForegroundColor Green
         foreach ($runningMonitor in $monitors) {
             $status = $runningMonitor.Status
@@ -280,8 +293,8 @@ if (-not $Quiet) {
         }
     }
     else {
-        if ($scanAllConfiguredMonitors) {
-            Write-Host 'Serial Monitors: not running (no configured profile bind responded)' -ForegroundColor DarkGray
+        if ($scanAllMonitors) {
+            Write-Host 'Serial Monitors: not running (no running monitor process endpoint responded)' -ForegroundColor DarkGray
         } else {
             Write-Host ("Serial Monitor: not running (no response on http://{0}:{1})" -f $HttpHost, $HttpPort) -ForegroundColor DarkGray
         }
@@ -337,6 +350,56 @@ if (-not $Quiet) {
         Write-Host "unpowered, or whose debugger has dropped off the USB bus is ABSENT, not UNKNOWN." -ForegroundColor DarkGray
     }
     Write-Host ""
+}
+
+# Automation consumes the status that each endpoint actually returned, not a
+# profile guessed from its process command line. ConfiguredProfile is retained
+# as diagnostic evidence for old/custom launchers whose /status omitted it.
+if ($Json) {
+    $monitorData = @(
+        foreach ($runningMonitor in $monitors) {
+            $status = $runningMonitor.Status
+            $tcpHost = $null
+            $tcpPort = $null
+            if ($status.tcp) {
+                $tcpHost = [string]$status.tcp.host
+                if ($null -ne $status.tcp.port) { $tcpPort = [int]$status.tcp.port }
+            }
+            [ordered]@{
+                profile            = [string]$status.profile
+                configured_profile = [string]$runningMonitor.ConfiguredProfile
+                port               = [string]$status.port
+                baud               = if ($null -ne $status.baud) { [int]$status.baud } else { $null }
+                connected          = [bool]$status.connected
+                http_host          = [string]$runningMonitor.HttpHost
+                http_port          = [int]$runningMonitor.HttpPort
+                http_url           = "http://$($runningMonitor.HttpHost):$($runningMonitor.HttpPort)"
+                tcp_host           = $tcpHost
+                tcp_port           = $tcpPort
+                log_file           = [string]$status.log_file
+            }
+        }
+    )
+    $portData = @(
+        foreach ($p in $ports) {
+            [ordered]@{
+                index           = [int]$p.Index
+                port            = [string]$p.Port
+                description     = [string]$p.Description
+                manufacturer    = [string]$p.Manufacturer
+                device_id       = [string]$p.DeviceId
+                vid             = [string]$p.Vid
+                pid             = [string]$p.Pid
+                held_by_monitor = [bool]$p.HeldByMonitor
+            }
+        }
+    )
+    [ordered]@{
+        schema_version = 1
+        monitors       = $monitorData
+        ports          = $portData
+    } | ConvertTo-Json -Depth 5
+    return
 }
 
 # In -Quiet (data) mode, emit the objects for pipeline / caller consumption

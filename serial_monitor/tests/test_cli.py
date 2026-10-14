@@ -3,10 +3,35 @@
 from __future__ import annotations
 
 import socket
+import json
 
 import pytest
 
-from ..cli import _bind_is_taken, _is_loopback
+from ..cli import _bind_is_taken, _is_loopback, com_loopback_host, main
+from ..config import ConfigError
+
+
+def test_com_number_maps_to_the_same_loopback_octet() -> None:
+    assert com_loopback_host("COM60") == "127.0.0.60"
+    assert com_loopback_host("com7") == "127.0.0.7"
+
+
+def test_non_windows_port_name_does_not_force_a_com_mapping() -> None:
+    assert com_loopback_host("/dev/ttyUSB0") is None
+
+
+@pytest.mark.parametrize("port", ["COM0", "COM255", "COM999"])
+def test_out_of_range_com_number_requires_an_explicit_host(port: str) -> None:
+    with pytest.raises(ConfigError, match="explicit"):
+        com_loopback_host(port)
+
+
+def test_show_config_with_a_com_port_reports_the_derived_endpoints(capsys) -> None:
+    assert main(["--show-config", "--profile", "ck-ev97", "--port", "COM41"]) == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["http_host"] == "127.0.0.41"
+    assert shown["tcp_host"] == "127.0.0.41"
+    assert shown["_sources"]["http_host"] == "derived from COM41"
 
 
 def _free_port(host: str, family: int) -> int:

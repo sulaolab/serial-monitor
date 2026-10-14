@@ -118,31 +118,32 @@ window whose transfer died so the UART can never be wedged mute.
 `GET /status` tells you which of these you are in (`tcp.allow_input`,
 `tx_gate.held_by`) instead of leaving you to guess why typing does nothing.
 
-## Which address does it bind to (two boards at once)
+## Which address does it bind to (several boards at once)
 
-Two monitors run on one PC simultaneously and both want 8080, so they are kept
-apart by loopback alias: `sonora` on `127.0.0.1`, `ck` on `127.0.0.5`. You should
-not have to remember which — the firmware repo declares it once:
+The selected COM number is the loopback suffix. `COM41` uses HTTP
+`127.0.0.41:8080` and raw TCP `127.0.0.41:23`, so the address visible in Tera
+Term needs no separate allocation table. The firmware repo declares the board
+profile independently:
 
 ```jsonc
 // dspic33ck-hal-lab/.serial-monitor.json
-{ "profile": "ck" }
+{ "profile": "ck-ev97" }
 ```
 
 ```powershell
 cd dspic33ck-hal-lab
-..\serial-monitor\start-serial-monitor.ps1
-# Profile 'ck'  ->  bind 127.0.0.5  (from: profile:ck)
+..\serial-monitor\start-serial-monitor.ps1 -Port COM41
+# Profile 'ck-ev97' -> HTTP 127.0.0.41:8080, raw TCP 127.0.0.41:23
 ```
 
 `profiles/` holds one file per board. A bench you would rather keep out of the
 checkout can live in `.serial-monitor-profiles/` next to it, or anywhere in
 `$SERIAL_MONITOR_PROFILES`; both win over a same-named file here.
 
-Precedence: explicit flag > `.serial-monitor.json` (found by walking up) >
-`-Profile <name>` > defaults. The COM port is deliberately *not* part of it and
-stays interactive — port numbers move when a board is re-plugged. `GET /status`
-reports the `profile`, so "which board am I on" is one call.
+Profile precedence is explicit `-Profile` > `.serial-monitor.json` (found by
+walking up) > generic defaults. The COM port is deliberately *not* stored and
+stays explicit/interactive because it may move when a board is re-plugged.
+`GET /status` reports both `profile` and `port`.
 
 One install serves every board and every session at once: processes are
 independent, the OS arbitrates the COM port, bind clashes are refused before the
@@ -152,6 +153,17 @@ running, `stop-serial-monitor.ps1` lists numbered entries and, at an interactive
 terminal, asks which one to stop. You can instead name one with `-Profile` /
 `-HttpHost` / `-Port` (or use `-All`). Redirected input remains fail-closed and
 stops nothing.
+
+Automation should consume the JSON inventory rather than parse that human table:
+
+```powershell
+$all = .\list-serial-monitor.ps1 -Json | ConvertFrom-Json
+$one = .\resolve-serial-monitor.ps1 -Profile ck-ev97 -Json | ConvertFrom-Json
+$one.http_url   # e.g. http://127.0.0.41:8080
+```
+
+The resolver matches the profile returned by `GET /status` and requires exactly
+one match. Zero or multiple matches are errors; it never guesses an endpoint.
 
 Full rules: [`docs/binding-and-profiles.md`](docs/binding-and-profiles.md).
 
@@ -190,11 +202,12 @@ you also get a `serial-monitor` command that works from anywhere:
 
 ```powershell
 cd ..\my-firmware-repo
-serial-monitor --show-config               # which bind does THIS repo resolve to?
+serial-monitor --show-config               # which profile/settings does THIS repo resolve to?
 ```
 
-Defaults: 230400 baud, HTTP on `127.0.0.1:8080`, raw TCP on `127.0.0.1:23`, logs
-in `serial_monitor/monitor_logs/<profile>/` (git-ignored). Both binds are loopback; the API
+Defaults: 230400 baud and ports 8080/23. On Windows, `COM<n>` supplies the host
+`127.0.0.<n>` unless an explicit host overrides it. Logs go to
+`serial_monitor/monitor_logs/<profile>/` (git-ignored). Both binds are loopback; the API
 is unauthenticated, drives the board, and can read any file on the host, so a
 non-loopback `--http-host`/`--tcp-host` is **refused**, not warned about. Exposing
 it anyway takes `--allow-non-loopback`, which is there to make that a decision
@@ -250,13 +263,12 @@ repo exists to end. A project needs one file of its own, and no code:
 
 ```jsonc
 // <firmware-repo>/.serial-monitor.json
-{ "profile": "ck" }        // or "sonora", "nano"
+{ "profile": "ck-ev97" }   // or ak-curio, ak-nano, ck-dm33, ck-nano, ...
 ```
 
-Then run `start-serial-monitor.ps1` from inside that repo and reach the API on the
-bind it prints. Don't hardcode `127.0.0.1:8080` in the project's docs — with two
-boards live, a base URL that is right today is how you end up driving the other
-board tomorrow.
+Then run `start-serial-monitor.ps1 -Port COM<n>` from inside that repo. The API is
+`http://127.0.0.<n>:8080`. Still confirm `profile` and `port` through `/status`
+before sending a command.
 
 ## Security
 

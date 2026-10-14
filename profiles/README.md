@@ -1,13 +1,11 @@
 # profiles/
 
-One file per board family, holding only what that family fixes: which loopback
-alias its monitor binds to, its baud, and — as documentation — the USB vendor ID
-that board's debugger uses.
+One file per board family, holding only what that family fixes: its canonical
+name, baud, and — as documentation — the USB vendor ID its debugger uses.
 
-Every monitor on one PC wants port 8080, so they are separated by address:
-`sonora` on `127.0.0.1`, `ck` on `127.0.0.5`, `nano` on `127.0.0.6`, `samha` on
-`127.0.0.7`, `eval92m` on `127.0.0.31`, `eval92s` on `127.0.0.32`. All are loopback (`127.0.0.0/8` is
-entirely local, no OS setup needed).
+Profiles do **not** allocate loopback aliases. The selected COM number does:
+`COM41` uses `127.0.0.41:8080` for HTTP and `127.0.0.41:23` for raw TCP. This
+makes the address derivable from Tera Term or Device Manager without a table.
 
 ## A profile may also live outside this checkout
 
@@ -24,21 +22,22 @@ what resolution will actually use.
 
 A profile never names a COM port. Port numbers change when a board is re-plugged,
 so freezing one here is a way to bridge to the wrong board — and no port is ever
-recommended or auto-picked either. `vid` is **not** inherited as a filter by the
-launcher: it is printed by `-Help` so you know which VID to expect, and narrowing
-the list is done by a `-Vid` you type yourself.
+recommended or auto-picked either. Once the caller names the current port, that
+number safely supplies the loopback suffix for this run. `vid` is **not** inherited
+as a filter by the launcher: narrowing the list is done by a `-Vid` you type.
 
 Usage:
 
 ```powershell
-.\start-serial-monitor.ps1 -Profile ck
+.\start-serial-monitor.ps1 -Profile ck-ev97 -Port COM41
 ```
 
 Better, from a firmware repo that declares itself once in `.serial-monitor.json`:
 
 ```json
-{ "profile": "ck" }
+{ "profile": "ck-ev97" }
 ```
 
-Then plain `start-serial-monitor.ps1` run anywhere inside that repo picks the ck
-bind up automatically -- see `../docs/binding-and-profiles.md`.
+Then `start-serial-monitor.ps1 -Port COM41` run anywhere inside that repo picks
+the board name up automatically and derives `127.0.0.41` from the named port.
+See `../docs/binding-and-profiles.md`.

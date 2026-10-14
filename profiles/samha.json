@@ -1,7 +1,5 @@
 {
   "name": "samha",
   "baud": 230400,
-  "http_host": "127.0.0.7",
-  "tcp_host": "127.0.0.7",
   "vid": "03EB"
 }

@@ -117,51 +117,38 @@ If your keystrokes vanish, `GET /status` distinguishes the three possible causes
 without guessing: `tcp.allow_input` false (read-only start), `tx_gate.held_by`
 non-null (a transfer is running), or `connected` false (no UART).
 
-## Base URL — NOT a constant. Resolve it, do not assume it.
+## Base URL — derive it from the COM number, then verify it
 
-Several monitors run on this PC at once, one per board, separated by loopback
-alias but all on port 8080. `127.0.0.1:8080` will answer even when it is the
-**wrong board**, so assuming it is how you end up driving someone else's hardware
-while every reply looks healthy.
+Several monitors run on this PC at once, one per UART, all on HTTP port 8080.
+The selected COM number is the loopback suffix: `COM41` uses
+`http://127.0.0.41:8080` and raw TCP `127.0.0.41:23`. This is intentionally the
+same number Tera Term and Device Manager show; there is no separate alias table.
 
-Resolve it for the repo you are working in:
+Run `list-serial-monitor.ps1` directly to see current COM ports and every running
+monitor. It reads the actual endpoint from each running monitor process, so an
+old fixed-bind monitor remains visible during migration without scanning unused
+COM-derived addresses.
 
-```bash
-# from inside the firmware repo (it declares its board in .serial-monitor.json)
-serial-monitor --show-config     # prints http_host/http_port + where they came from
-```
+Automation can use `list-serial-monitor.ps1 -Json` for the complete inventory,
+or `resolve-serial-monitor.ps1 -Profile <canonical-name> -Json` for one running
+profile. The latter succeeds only for exactly one `/status` profile match; zero
+or multiple matches stop without guessing.
 
-That console script exists only after `pip install -e <path>/serial-monitor`.
-Without the install, `python -m serial_monitor --show-config` works **only from
-the serial-monitor repo itself** (a sibling checkout is not on `sys.path`) unless
-you set `PYTHONPATH=<path>/serial-monitor`. The no-setup equivalent, which
-resolves the *caller's* directory either way, is:
-
-```powershell
-pwsh ../serial-monitor/start-serial-monitor.ps1 -List
-# Profile 'ck'  ->  bind 127.0.0.5  (from: profile:ck)   -- then it exits
-```
-
-Or run `list-serial-monitor.ps1` directly, which reports every running monitor
-declared by the configured profiles.  When a launcher calls it with an explicit
-bind, it reports only that bind. **Do not carry an alias table in your head** —
-which board owns which alias is a property of this PC's profiles, so ask for it:
-`start-serial-monitor.ps1 -Help` prints every profile with its bind, and
-`--show-config` prints the one your directory resolves to. The profiles that exist
-today are `sonora` (`127.0.0.1`), `ck` (`127.0.0.5`), `nano` (`127.0.0.6`),
-`samha` (`127.0.0.7`), `eval92m` (`127.0.0.31`) and `eval92s` (`127.0.0.32`) — see
-`docs/binding-and-profiles.md`.
+Profiles now name the board rather than the bind. The canonical names are
+`ak-curio`, `ak-nano`, `ck-ev97`, `ck-dm33`, `ck-nano`, `samha`, `eval92m`, and
+`eval92s`. Legacy `sonora` safely resolves to `ak-curio`; ambiguous `ck` and
+`nano` require an explicit canonical choice. See `docs/binding-and-profiles.md`.
 
 Then **confirm with `GET /status` that `profile` and `port` are the board you
 mean** before sending anything. One call, and the wrong-monitor mistake stops
 being invisible:
 
 ```json
-{"profile": "ck", "port": "COM60", "connected": true, ...}
+{"profile": "ck-ev97", "port": "COM41", "connected": true, ...}
 ```
 
-Examples below use `127.0.0.1:8080` as a stand-in; substitute the bind you
-resolved.
+Examples below use `127.0.0.1:8080` as a stand-in. Substitute
+`127.0.0.<COM-number>:8080` for the monitor you mean.
 
 ## Step 0 — check the monitor is up and connected
 
@@ -398,10 +385,10 @@ cd serial-monitor
 
 # easiest: the launcher (230400/8080/23). No port is ever auto-picked: name one,
 # or be prompted for one in an interactive shell.
-.\start-serial-monitor.ps1 -Help           # which bind address is which board + examples
+.\start-serial-monitor.ps1 -Help           # canonical profiles + COM-derived bind rule
 .\start-serial-monitor.ps1 -Port COM12     # name a port explicitly
 .\start-serial-monitor.ps1 -Port 1         # or pick by list-serial-monitor.ps1 index
-.\start-serial-monitor.ps1 -Profile ck -Port COM60   # another board (binds 127.0.0.5)
+.\start-serial-monitor.ps1 -Profile ck-ev97 -Port COM41 # binds 127.0.0.41
 .\start-serial-monitor.ps1 -List           # just show ports + monitor status, then exit
 
 # or the explicit command (name the port yourself). `python -m serial_monitor`
@@ -434,7 +421,7 @@ exits; just use the running one.
 
 Logs default to `monitor_logs/` inside the `serial-monitor` folder (git-ignored,
 no `--log-dir` needed). Humans can watch the same stream live in Tera Term via
-TCP `127.0.0.1:23`, which is **read/write by default** (they can type commands
+TCP `127.0.0.<COM-number>:23`, which is **read/write by default** (they can type commands
 too); `--no-tcp-allow-input` makes it view-only. See `README.md` next to this
 file for all options.
 

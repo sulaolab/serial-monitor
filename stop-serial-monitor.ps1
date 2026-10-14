@@ -26,14 +26,14 @@
     so automation still refuses ambiguous stops.
 
     Note that -HttpPort alone usually does NOT narrow anything: instances are
-    separated by loopback alias (127.0.0.1 vs 127.0.0.5), and they all use 8080.
+    separated by the COM-derived loopback alias (COM41 -> 127.0.0.41), and they all use 8080.
 
 .PARAMETER Profile
     Stop the instance started for this board family (matches the
     --name the launcher passed).
 
 .PARAMETER HttpHost
-    Stop the instance bound to this HTTP host, e.g. '127.0.0.5'.
+    Stop the instance bound to this HTTP host, e.g. '127.0.0.41'.
 
 .PARAMETER Port
     Stop the instance that owns this COM port, e.g. 'COM60'.
@@ -49,8 +49,8 @@
     Suppress the per-process details; just report how many were stopped.
 
 .EXAMPLE
-    .\stop-serial-monitor.ps1 -Profile ck
-    Stop the monitor serving the CK board and nothing else.
+    .\stop-serial-monitor.ps1 -Profile ck-ev97
+    Stop the monitor serving the EV97 CK board and nothing else.
 
 .EXAMPLE
     .\stop-serial-monitor.ps1

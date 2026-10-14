@@ -12,6 +12,7 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import socket
 import sys
 
@@ -23,6 +24,25 @@ from .config import ConfigError, available_profiles, resolve
 from .log_writer import LogWriter
 from .serial_bridge import TERMINATORS, SerialManager
 from .tcp_stream import TcpStreamServer
+
+
+def com_loopback_host(port: str) -> str | None:
+    """Return the predictable loopback host for a Windows COM port.
+
+    Non-Windows-style names are left alone so Linux/macOS callers retain the
+    configured/default host.  COM numbers outside one ordinary IPv4 host octet
+    require an explicit host rather than a surprising fallback.
+    """
+    match = re.fullmatch(r"COM(\d+)", port, flags=re.IGNORECASE)
+    if not match:
+        return None
+    number = int(match.group(1))
+    if not 1 <= number <= 254:
+        raise ConfigError(
+            f"{port} cannot map safely to 127.0.0.<n>; pass explicit "
+            "--http-host and --tcp-host values"
+        )
+    return f"127.0.0.{number}"
 
 
 def default_log_dir(profile: str | None = None) -> str:
@@ -114,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--http-host",
         default=None,
-        help="HTTP bind host (default 127.0.0.1, or the profile's). Loopback only: the API is "
+        help="HTTP bind host (Windows default: 127.0.0.<COM-number>). Loopback only: the API is "
         "unauthenticated and can read any file on this host (see api.py).",
     )
     p.add_argument("--http-port", type=int, default=None, help="HTTP port (default 8080)")
@@ -134,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
         "(default 23; nothing is decoded and Telnet is neither detected nor "
         "blocked -- every client is told on connect; 0 disables)",
     )
-    p.add_argument("--tcp-host", default=None, help="TCP terminal bind host (default 127.0.0.1, or the profile's)")
+    p.add_argument("--tcp-host", default=None, help="TCP terminal bind host (Windows default: 127.0.0.<COM-number>)")
     p.add_argument(
         "--tcp-allow-input",
         action=argparse.BooleanOptionalAction,
@@ -243,6 +263,8 @@ def _who_is_on(host: str, port: int) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    explicit_http_host = args.http_host is not None
+    explicit_tcp_host = args.tcp_host is not None
 
     try:
         cfg, sources = resolve(
@@ -262,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[serial-monitor] {exc}", file=sys.stderr)
         return 2
 
-    if args.show_config:
+    if args.show_config and not args.port:
         print(json.dumps({**cfg, "_sources": sources}, indent=2))
         return 0
 
@@ -274,13 +296,35 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    derived_host = None
+    if not explicit_http_host or not explicit_tcp_host:
+        try:
+            derived_host = com_loopback_host(args.port)
+        except ConfigError as exc:
+            print(f"[serial-monitor] {exc}", file=sys.stderr)
+            return 2
+
     args.baud = cfg["baud"]
     args.terminator = cfg["terminator"]
-    args.http_host = cfg["http_host"]
+    args.http_host = cfg["http_host"] if explicit_http_host or derived_host is None else derived_host
     args.http_port = cfg["http_port"]
-    args.tcp_host = cfg["tcp_host"]
+    args.tcp_host = cfg["tcp_host"] if explicit_tcp_host or derived_host is None else derived_host
     args.tcp_port = cfg["tcp_port"]
     profile_name = cfg["name"]
+
+    if args.show_config:
+        shown = {
+            **cfg,
+            "http_host": args.http_host,
+            "tcp_host": args.tcp_host,
+        }
+        shown_sources = dict(sources)
+        if derived_host is not None and not explicit_http_host:
+            shown_sources["http_host"] = f"derived from {args.port.upper()}"
+        if derived_host is not None and not explicit_tcp_host:
+            shown_sources["tcp_host"] = f"derived from {args.port.upper()}"
+        print(json.dumps({**shown, "_sources": shown_sources}, indent=2))
+        return 0
 
     # Two boards are separated only by their loopback alias, so a bind clash is
     # never harmless: either this monitor fails late, or -- far worse -- you go on
@@ -297,8 +341,8 @@ def main(argv: list[str] | None = None) -> int:
             f"[serial-monitor] {label} bind {host}:{port} is already in use.{detail}"
             "\n  A monitor is probably already running there -- use it instead of "
             "starting a second one."
-            "\n  For a different board, give it its own loopback alias: "
-            "--profile <name>, or --http-host/--tcp-host.",
+            "\n  A different COM port gets its own 127.0.0.<COM-number> alias. "
+            "Use --http-host/--tcp-host only for an explicit override.",
             file=sys.stderr,
         )
         return 3

@@ -1,17 +1,10 @@
-"""Where the bind address and baud come from -- one resolver, four sources.
+"""Resolve board profile metadata and explicit endpoint overrides.
 
-The problem this solves is not typing convenience.  Two boards are debugged on
-this PC at once, each wanting its own monitor, and both want port 8080.  They are
-kept apart by loopback alias (``127.0.0.1`` for one, ``127.0.0.5`` for another),
-which means "which address" is a fact about the *board being worked on*, not about
-the person or the tool.  Anything that requires a human to remember it will
-eventually put an agent on the wrong board while it believes it is on the right
-one -- and both answer on 8080.
-
-So the consuming repo declares it.  A ``.serial-monitor.json`` sitting in the
-firmware repo says "monitors for this board live on 127.0.0.5", and the launcher
-finds it by walking up from the current directory.  Working in that repo is enough
-to get the right bind; nothing has to be remembered or passed.
+The consuming repository declares which board family it drives. The current COM
+port is still named at launch time; on Windows its number supplies the predictable
+loopback host (COM41 -> 127.0.0.41) in ``cli.py`` and the PowerShell launcher.
+Profiles therefore identify boards and their serial defaults rather than owning
+a permanent address allocation.
 
 Precedence, highest first:
 
@@ -23,7 +16,7 @@ Precedence, highest first:
 Your boards are not this tool's business
 ----------------------------------------
 The profile search path is deliberately not "this repo" alone.  A profile names
-*your* bench -- board names, which alias each one gets -- and that is neither
+*your* bench -- board names and serial defaults -- and that is neither
 generic enough to ship nor something a tool update should be able to overwrite.
 So a profile is looked up in, first match winning:
 
@@ -44,9 +37,8 @@ inherited as a port filter by the launcher, because a shared config quietly hidi
 candidates misleads in the same way that starring one does.  ``-Vid`` is a filter
 the caller types.
 
-``resolve()`` also returns where each value came from, because a wrong bind is
-close to undebuggable otherwise: the whole failure mode is a value you did not
-know was being applied.
+``resolve()`` also returns where each value came from so explicit exceptional
+host/port overrides remain visible.
 """
 
 from __future__ import annotations
@@ -60,6 +52,18 @@ PROFILE_DIR_NAME = "profiles"
 # environment to set, and re-cloning the tool cannot take your bench with it.
 LOCAL_PROFILE_DIR_NAME = ".serial-monitor-profiles"
 PROFILE_PATH_ENV = "SERIAL_MONITOR_PROFILES"
+
+# Old profile names that had exactly one physical meaning may remain as input
+# aliases while callers migrate.  ``ck`` and ``nano`` are deliberately not
+# aliases: both names were reused for more than one board, so silently choosing
+# a target would recreate the wrong-board failure this profile system prevents.
+SAFE_PROFILE_ALIASES = {
+    "sonora": "ak-curio",
+}
+AMBIGUOUS_PROFILE_ALIASES = {
+    "ck": "ck-ev97, ck-dm33, or ck-nano",
+    "nano": "ak-nano or ck-nano",
+}
 
 # Keys a profile or project config may set.  Anything else is an error rather
 # than a silently ignored typo -- "why is it still on 8080" is a bad afternoon.
@@ -116,13 +120,35 @@ def profile_dirs() -> list[str]:
     return dirs
 
 
-def profile_path(name: str) -> str | None:
-    """Path of profile ``name``, or None if no search directory has it."""
+def _exact_profile_path(name: str) -> str | None:
     for d in profile_dirs():
         candidate = os.path.join(d, f"{name}.json")
         if os.path.isfile(candidate):
             return candidate
     return None
+
+
+def canonical_profile_name(name: str) -> str:
+    """Resolve a safe legacy alias, refusing names that became ambiguous.
+
+    An exact file in the profile search path always wins.  This preserves the
+    documented ability for a bench-owned external profile to override shipped
+    policy, even if its name is one that this checkout retired.
+    """
+    if _exact_profile_path(name) is not None:
+        return name
+    if name in AMBIGUOUS_PROFILE_ALIASES:
+        choices = AMBIGUOUS_PROFILE_ALIASES[name]
+        raise ConfigError(
+            f"profile '{name}' is retired because it named multiple boards; "
+            f"choose {choices}"
+        )
+    return SAFE_PROFILE_ALIASES.get(name, name)
+
+
+def profile_path(name: str) -> str | None:
+    """Path of profile ``name`` (after safe alias resolution), or None."""
+    return _exact_profile_path(canonical_profile_name(name))
 
 
 def available_profiles() -> list[str]:
@@ -221,7 +247,8 @@ def resolve(
 
     # A project config may name the profile it builds on, so a repo says "I am a
     # board of that family" once instead of restating every field.
-    effective_profile = profile or project_cfg.get("profile")
+    requested_profile = profile or project_cfg.get("profile")
+    effective_profile = canonical_profile_name(requested_profile) if requested_profile else None
     if effective_profile:
         for key, val in load_profile(effective_profile).items():
             values[key] = val

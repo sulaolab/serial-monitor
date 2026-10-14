@@ -25,17 +25,10 @@
     and would confidently star one board while run from another board's repo
     (measured 2026-08-09), so the guess is gone rather than tuned.
 
-     Bind address and baud come from the board's profile: a .serial-monitor.json
-     in the firmware repo you are standing in, or -Profile <name>. Without either,
-     230400 baud on 127.0.0.1:8080 (HTTP) and 127.0.0.1:23 (raw TCP). Two boards
-     at once want two aliases -- see docs/binding-and-profiles.md. Logs go to
-     serial_monitor/monitor_logs/.
-
-     With no arguments, after selecting a COM port interactively, choose either
-     the normal raw TCP address or 127.0.0.<COM-number>. The HTTP API follows
-     the same selected address, so the whole monitor stays on one alias. Any
-     argument preserves explicit/profile address behaviour and skips that second
-     menu.
+     The selected COM number decides the bind address: COM60 uses
+     127.0.0.60:8080 (HTTP) and 127.0.0.60:23 (raw TCP). A profile names the
+     board and supplies baud/default metadata; it no longer assigns a fixed
+     loopback alias. Explicit -HttpHost/-TcpHost values remain escape hatches.
 
     The COM port is never taken from a profile: port numbers move when a board is
     re-plugged, so naming it stays your job every time -- interactively, with
@@ -43,9 +36,7 @@
 
 .EXAMPLE
     .\start-serial-monitor.ps1 -Help
-    Show which bind address belongs to which board (read from profiles/*.json),
-    how the profile is chosen, and the command for each board -- read from the
-    profile search path, not typed out here. Exits without starting anything.
+    Show the canonical board profiles, COM-to-address rule, and examples.
 
 .EXAMPLE
     .\start-serial-monitor.ps1 -List
@@ -53,9 +44,7 @@
 
 .EXAMPLE
     .\start-serial-monitor.ps1
-    Pick a port interactively, then choose the default raw TCP address or the
-    address derived from that COM number (for example COM31 -> 127.0.0.31:23).
-    The HTTP API follows the selected address.
+    Pick a port interactively. COM31 uses 127.0.0.31 for both HTTP and raw TCP.
 
 .EXAMPLE
     .\start-serial-monitor.ps1 -Port COM12 -Baud 115200
@@ -74,14 +63,13 @@ param(
     # COM name (COM12), a bare list index (2), or empty to select interactively.
     [string]$Port = '',
 
-    # Board family whose loopback alias / baud / VID hint to use, e.g. 'ck'.
+    # Board family / baud metadata, e.g. 'ck-ev97'.
     # Any name -Help lists (profiles/ here, or a directory outside the checkout).
     # Usually unnecessary: a .serial-monitor.json in the firmware repo you are
     # standing in already declares it. See docs/binding-and-profiles.md.
     [string]$Profile = '',
 
-    # These four default to whatever the profile / .serial-monitor.json resolves
-    # to. Passing one explicitly wins over both.
+    # Ports default from config. Hosts derive from COM unless explicitly passed.
     [int]$Baud = 0,
     [string]$HttpHost = '',
     [int]$HttpPort = 0,
@@ -93,8 +81,7 @@ param(
     [string]$Vid,
     # Just list the ports + monitor status (via list-serial-monitor.ps1) and exit.
     [switch]$List,
-    # Print how to aim this at a specific board (which bind address, how to pick
-    # it) and exit. Reads the actual profiles, so it cannot drift from them.
+    # Print canonical profiles, the COM-derived bind rule, and examples.
     [switch]$Help,
     # By default the Tera Term TCP tail is read/write (you can type commands).
     # Pass -ReadOnly to make it view-only.
@@ -104,12 +91,6 @@ param(
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Extra
 )
-
-# With no arguments this script is a two-step interactive launcher: choose the
-# UART first, then choose whether to keep the normal loopback address or give
-# this UART its own 127.0.0.<COM-number> address.  Any supplied argument keeps
-# the existing non-interactive/explicit behaviour intact.
-$bareInteractiveStart = $PSBoundParameters.Count -eq 0
 
 $ErrorActionPreference = 'Stop'
 
@@ -123,12 +104,8 @@ $ErrorActionPreference = 'Stop'
 $listScript = Join-Path $PSScriptRoot 'list-serial-monitor.ps1'
 
 <#
-  -Help exists because the two things you have to get right -- which board's bind
-  address, and which COM port -- are the two things this script will not guess for
-  you, and `Get-Help` buries that under the parameter list. The profile table is
-  read from profiles/*.json rather than typed out here: a help text that lists
-  addresses from memory is exactly how someone ends up driving 127.0.0.1 while
-  reading a document that says 127.0.0.5.
+  -Help keeps the board name and COM-selection requirements visible. The address
+  no longer needs a memorized allocation table: it follows the selected COM.
 #>
 function Show-BoardHelp {
     # Every directory config.py searches, in the same precedence: a profile kept
@@ -144,15 +121,14 @@ function Show-BoardHelp {
     Write-Host "start-serial-monitor.ps1 -- one monitor per board, each on its own loopback alias." -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Two things must be right, and neither is guessed for you:" -ForegroundColor Cyan
-    Write-Host "    1. the BIND ADDRESS -- which board's monitor this is (all on port 8080)"
-    Write-Host "    2. the COM PORT     -- never taken from a profile; port numbers move on re-plug"
+    Write-Host "    1. the PROFILE      -- which board family this monitor serves"
+    Write-Host "    2. the COM PORT     -- its current Windows number; also the bind suffix"
     Write-Host ""
-    Write-Host "  With no arguments: choose a COM port, then choose the default raw TCP address" -ForegroundColor Cyan
-    Write-Host "  or 127.0.0.<COM-number>. The HTTP API follows the selected address." -ForegroundColor Cyan
-    Write-Host "  Passing any argument keeps explicit/profile address selection and skips this second menu."
+    Write-Host "  The selected COM port determines both endpoints:" -ForegroundColor Cyan
+    Write-Host "    COM<n> -> HTTP 127.0.0.<n>:8080 and raw TCP 127.0.0.<n>:23" -ForegroundColor Cyan
     Write-Host ""
 
-    Write-Host "  Profiles (bind address comes from here):" -ForegroundColor Cyan
+    Write-Host "  Profiles (board identity; bind comes from the selected COM):" -ForegroundColor Cyan
     $seen = @{}
     foreach ($dir in $profileDirs) {
         if (-not (Test-Path $dir)) { continue }
@@ -161,32 +137,28 @@ function Show-BoardHelp {
             $seen[$f.Name] = $true
             try { $p = Get-Content -Raw -LiteralPath $f.FullName | ConvertFrom-Json } catch { continue }
             $vid = if ($p.vid) { "VID_$($p.vid)" } else { 'any VID' }
-            Write-Host ("    -Profile {0,-16} ->  http://{1}:{2}   (raw TCP {1}:{3}, {4} baud, {5})" -f `
-                $p.name, $p.http_host, $(if ($p.http_port) { $p.http_port } else { 8080 }), `
-                $(if ($p.tcp_port) { $p.tcp_port } else { 23 }), $p.baud, $vid)
+            Write-Host ("    -Profile {0,-16} ({1} baud, {2})" -f $p.name, $p.baud, $vid)
         }
     }
     Write-Host "    (searched: $($profileDirs -join ' ; '))" -ForegroundColor DarkGray
-    Write-Host "    (no profile)      ->  http://127.0.0.1:8080   -- the DEFAULT" -ForegroundColor DarkGray
+    Write-Host "    (no profile)      -> generic label/settings; address still follows COM" -ForegroundColor DarkGray
     Write-Host ""
 
     Write-Host "  How the profile is chosen, in order:" -ForegroundColor Cyan
     Write-Host "    1. -Profile <name> on the command line"
     Write-Host "    2. a .serial-monitor.json in the directory you are standing in (or above it)"
-    Write-Host "    3. nothing -> the default above. Standing in serial-monitor/ itself gives you"
-    Write-Host "       this case, which binds the default address whatever board you meant." -ForegroundColor DarkGray
+    Write-Host "    3. nothing -> generic label/settings (still requires an explicit COM choice)" -ForegroundColor DarkGray
     Write-Host ""
 
     Write-Host "  Examples:" -ForegroundColor Cyan
-    Write-Host "    # interactive: select COM31, then choose 127.0.0.1:23 or 127.0.0.31:23:"
+    Write-Host "    # interactive: selecting COM31 binds both services to 127.0.0.31:"
     Write-Host "    .\start-serial-monitor.ps1" -ForegroundColor Green
     Write-Host ""
-    Write-Host "    # CK board (Curiosity Nano) on 127.0.0.5, from anywhere:"
-    Write-Host "    .\start-serial-monitor.ps1 -Profile ck -Vid 03EB" -ForegroundColor Green
-    Write-Host "    .\start-serial-monitor.ps1 -Profile ck -Port COM60" -ForegroundColor Green
+    Write-Host "    # EV97 board on COM60 -> 127.0.0.60, from anywhere:"
+    Write-Host "    .\start-serial-monitor.ps1 -Profile ck-ev97 -Port COM60" -ForegroundColor Green
     Write-Host ""
-    Write-Host "    # sonora (dsPIC33AK, PKOB4 CDC) on 127.0.0.1:"
-    Write-Host "    .\start-serial-monitor.ps1 -Profile sonora -Port COM12" -ForegroundColor Green
+    Write-Host "    # AK Curiosity on COM12 -> 127.0.0.12:"
+    Write-Host "    .\start-serial-monitor.ps1 -Profile ak-curio -Port COM12" -ForegroundColor Green
     Write-Host ""
     Write-Host "    # from inside a firmware repo, the profile is already declared -- name the port:"
     Write-Host "    pwsh ../serial-monitor/start-serial-monitor.ps1 -Port COM12" -ForegroundColor Green
@@ -196,8 +168,8 @@ function Show-BoardHelp {
     Write-Host ""
     Write-Host "  Check before you drive it:" -ForegroundColor Cyan
     Write-Host "    .\start-serial-monitor.ps1 -List        # resolved bind + ports + is one running"
-    Write-Host "    curl http://127.0.0.5:8080/status       # confirm profile+port ARE the board you mean"
-    Write-Host "    .\stop-serial-monitor.ps1 -Profile ck   # never -All: that kills other boards too" -ForegroundColor Yellow
+    Write-Host "    curl http://127.0.0.60:8080/status          # confirm profile+port ARE the board you mean"
+    Write-Host "    .\stop-serial-monitor.ps1 -Profile ck-ev97 # never -All: that kills other boards too" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "  Full details: docs/binding-and-profiles.md   |   Get-Help for every parameter." -ForegroundColor DarkGray
     Write-Host ""
@@ -209,12 +181,8 @@ if ($Help) {
 }
 
 # --- resolve the bind/baud/VID -----------------------------------------------
-# Delegated to `python -m serial_monitor.config`, deliberately: two boards are
-# separated only by their loopback alias, and two implementations of "where does
-# that come from" is how the answer starts depending on which one you asked. The
-# resolver walks up from the CALLER's directory ($startDir, captured before any
-# Push-Location), so standing in a firmware repo that declares
-# .serial-monitor.json is enough.
+# Board metadata resolution is delegated to `python -m serial_monitor.config`.
+# The bind itself is derived below, after the caller has named the COM port.
 $startDir = (Get-Location).Path
 $cfgArgs = @('-m', 'serial_monitor.config', '--start-dir', $startDir, '--with-sources')
 if (-not [string]::IsNullOrWhiteSpace($Profile)) { $cfgArgs += @('--profile', $Profile) }
@@ -239,8 +207,7 @@ if (-not $PSBoundParameters.ContainsKey('HttpHost')) { $HttpHost = [string]$cfg.
 if (-not $PSBoundParameters.ContainsKey('HttpPort')) { $HttpPort = [int]$cfg.http_port }
 if (-not $PSBoundParameters.ContainsKey('TcpHost'))  { $TcpHost  = [string]$cfg.tcp_host }
 if (-not $PSBoundParameters.ContainsKey('TcpPort'))  { $TcpPort  = [int]$cfg.tcp_port }
-# A profile's `vid` is NOT inherited. It decides the bind address and nothing
-# about the COM port: letting a shared config file silently narrow the port list
+# A profile's `vid` is NOT inherited. Letting a shared config file silently narrow the port list
 # is the same misdirection as starring a port -- it just hides candidates instead
 # of pointing at one. Pass -Vid yourself when you want that filter.
 
@@ -254,12 +221,11 @@ $bindOrigin = if ($PSBoundParameters.ContainsKey('HttpHost')) { 'command line' }
 # -List: show the ports + monitor status and stop here. -Vid must reach the list
 # script here too, or `-List -Vid 04D8` would show the default 03EB-first view.
 if ($List) {
-    Write-Host ("Profile '{0}'  ->  bind {1}  (from: {2})" -f $profileName, $HttpHost, $bindOrigin) -ForegroundColor DarkCyan
-    if (-not [string]::IsNullOrWhiteSpace($Vid)) {
-        & $listScript -HttpHost $HttpHost -HttpPort $HttpPort -Vid $Vid
-    } else {
-        & $listScript -HttpHost $HttpHost -HttpPort $HttpPort
-    }
+    $listArgs = @{}
+    if ($PSBoundParameters.ContainsKey('HttpHost')) { $listArgs.HttpHost = $HttpHost }
+    if ($PSBoundParameters.ContainsKey('HttpPort')) { $listArgs.HttpPort = $HttpPort }
+    if (-not [string]::IsNullOrWhiteSpace($Vid)) { $listArgs.Vid = $Vid }
+    & $listScript @listArgs
     exit 0
 }
 
@@ -267,7 +233,7 @@ if ($List) {
 function Resolve-Port {
     param([string]$Requested)
 
-    $listArgs = @{ HttpHost = $HttpHost; HttpPort = $HttpPort; Quiet = $true }
+    $listArgs = @{ Quiet = $true }
     if (-not [string]::IsNullOrWhiteSpace($Vid)) { $listArgs['Vid'] = $Vid }
     $ports = @(& $listScript @listArgs)
     if ($ports.Count -eq 0) {
@@ -277,8 +243,7 @@ function Resolve-Port {
 
     # Nothing here picks a port on its own -- not $ports[0], and no VID
     # preference order either. The COM port is the one thing this tool cannot
-    # infer: the profile only knows the bind address, and a mark that guesses
-    # "probably this board" reads exactly like one that knows (it starred one
+    # infer: a mark that guesses "probably this board" reads exactly like one that knows (it starred one
     # board while run from another's repo, 2026-08-09). Say which port you mean.
     # The one non-interactive shortcut is -Vid: if YOU narrow the list to a vendor
     # and exactly one port is left, that is your statement, not our guess.
@@ -336,52 +301,34 @@ function Resolve-Port {
     exit 1
 }
 
-function Select-InteractiveBind {
+function Get-ComDerivedBind {
     param(
         [Parameter(Mandatory)]
         [string]$SelectedPort
     )
 
-    # COM names selected by Resolve-Port are normalized to COM<n>.  Restrict the
-    # derived address to one IPv4 octet: COM256 and above cannot map to a valid
-    # 127.0.0.<n> host and therefore retain the normal default only.
+    # COM names selected by Resolve-Port are normalized to COM<n>. Restrict the
+    # derived address to one ordinary host octet; explicit hosts remain available
+    # for unusual names and COM numbers outside this range.
     $match = [regex]::Match($SelectedPort, '^COM(\d+)$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
     if (-not $match.Success) {
-        return $null
+        throw "Port '$SelectedPort' cannot derive a loopback address. Pass -HttpHost and -TcpHost explicitly."
     }
     $comNumber = [int]$match.Groups[1].Value
-    if ($comNumber -lt 1 -or $comNumber -gt 255) {
-        Write-Host ("COM{0} cannot be represented as 127.0.0.<n>; using the default bind." -f $comNumber) -ForegroundColor Yellow
-        return $null
+    if ($comNumber -lt 1 -or $comNumber -gt 254) {
+        throw "COM$comNumber cannot be represented safely as 127.0.0.<n>. Pass -HttpHost and -TcpHost explicitly."
     }
-
-    $derivedHost = "127.0.0.$comNumber"
-    Write-Host ""
-    Write-Host "Select raw TCP address:" -ForegroundColor Cyan
-    Write-Host ("  1. {0}:{1}  (default; HTTP API: http://{0}:{2})" -f $TcpHost, $TcpPort, $HttpPort)
-    Write-Host ("  2. {0}:{1}  (COM{2}; HTTP API: http://{0}:{3})" -f $derivedHost, $TcpPort, $comNumber, $HttpPort)
-
-    while ($true) {
-        $answer = Read-Host "Select 1 or 2"
-        switch ($answer.Trim()) {
-            '1' { return $null }
-            '2' { return $derivedHost }
-            default { Write-Host "Enter 1 or 2." -ForegroundColor Yellow }
-        }
-    }
+    return "127.0.0.$comNumber"
 }
 
 $Port = Resolve-Port -Requested $Port
-
-if ($bareInteractiveStart) {
-    $interactiveHost = Select-InteractiveBind -SelectedPort $Port
-    if ($null -ne $interactiveHost) {
-        # Keep both monitor endpoints together.  This makes the HTTP API's
-        # /status endpoint unambiguously refer to the selected UART.
-        $HttpHost = $interactiveHost
-        $TcpHost = $interactiveHost
-        $bindOrigin = 'interactive COM-address selection'
-    }
+$needsDerivedHttp = -not $PSBoundParameters.ContainsKey('HttpHost')
+$needsDerivedTcp = -not $PSBoundParameters.ContainsKey('TcpHost')
+if ($needsDerivedHttp -or $needsDerivedTcp) {
+    $derivedHost = Get-ComDerivedBind -SelectedPort $Port
+    if ($needsDerivedHttp) { $HttpHost = $derivedHost }
+    if ($needsDerivedTcp) { $TcpHost = $derivedHost }
+    if ($needsDerivedHttp) { $bindOrigin = "derived from $Port" }
 }
 
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {

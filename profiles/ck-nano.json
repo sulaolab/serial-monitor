@@ -1,0 +1,5 @@
+{
+  "name": "ck-nano",
+  "baud": 230400,
+  "vid": "03EB"
+}
