@@ -423,12 +423,22 @@ Get-PnpDevice -Class Ports | Where-Object Status -eq OK |
     Select-Object FriendlyName, InstanceId    # VID_xxxx & PID_xxxx, per port
 ```
 
-**The launcher stays in the foreground for the monitor's whole life** (that is
-what a human's PowerShell window is for). An agent must start it with its shell
-tool's background mode (Claude Code: `run_in_background: true`); a foreground call
-blocks until the tool times out, and stopping that call kills the monitor. Run it
-in the background (or a separate terminal) so you can keep issuing HTTP
-calls, then poll `GET /status` until `connected: true`. If a monitor is **already
+**Agents: start it with `-Detach`.** Without it the launcher stays in the
+foreground for the monitor's whole life (that is what a human's PowerShell window
+is for): an agent's shell call blocks until it times out, and stopping that call
+kills the monitor.
+
+```powershell
+.\start-serial-monitor.ps1 -Profile ak-curio -Port COM17 -Detach
+```
+
+`-Detach` opens the monitor in its own PowerShell window -- the same window a
+human would open by hand, titled `serial-monitor <profile> <COM>` -- returns once
+`/status` answers, and says `Already running` (exit 0) if that endpoint is up.
+The monitor outlives the agent session. Closing the window or
+`stop-serial-monitor.ps1` stops it; a startup failure keeps the window open so the
+error can be read. Otherwise run it in the background (or a separate terminal) so
+you can keep issuing HTTP calls, then poll `GET /status` until `connected: true`. If a monitor is **already
 running**, don't start another — the second one fails to bind the port/HTTP and
 exits; just use the running one.
 

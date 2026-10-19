@@ -55,6 +55,10 @@
     Use the port shown as index 2 in list-serial-monitor.ps1.
 
 .EXAMPLE
+    .\start-serial-monitor.ps1 -Profile ak-curio -Port COM17 -Detach
+    Open the monitor in its own window and return when it answers (for agents).
+
+.EXAMPLE
     .\start-serial-monitor.ps1 -ReadOnly
     Make the Tera Term TCP tail view-only (default is read/write).
 #>
@@ -86,6 +90,10 @@ param(
     # By default the Tera Term TCP tail is read/write (you can type commands).
     # Pass -ReadOnly to make it view-only.
     [switch]$ReadOnly,
+    # Run the monitor in its own new PowerShell window and return once /status
+    # answers. For agents and scripts: their shell call is not held, and the
+    # monitor outlives the caller. Closing that window stops it.
+    [switch]$Detach,
     # Any extra flags are passed straight through to `python -m serial_monitor`
     # (e.g. --log-dir <path>, --dtr off).
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -333,6 +341,41 @@ if ($needsDerivedHttp -or $needsDerivedTcp) {
 
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     Write-Error "python not found on PATH. Install Python 3.10+ and try again."
+    exit 1
+}
+
+if ($Detach) {
+    # Hand the monitor to its own PowerShell window -- the same window a human
+    # would open by hand -- and return once it answers. Everything is already
+    # resolved, so the child gets explicit values and prompts for nothing.
+    $base = "http://{0}:{1}" -f $HttpHost, $HttpPort
+    try {
+        $st = Invoke-RestMethod -Uri "$base/status" -TimeoutSec 2 -ErrorAction Stop
+        Write-Host ("Already running: {0}  profile={1} port={2} connected={3}" -f $base, $st.profile, $st.port, $st.connected) -ForegroundColor Yellow
+        exit 0
+    } catch { }
+    $childArgs = @("-Port '$Port'", "-Profile '$profileName'", "-Baud $Baud",
+        "-HttpHost '$HttpHost'", "-HttpPort $HttpPort", "-TcpHost '$TcpHost'", "-TcpPort $TcpPort")
+    if ($ReadOnly) { $childArgs += '-ReadOnly' }
+    foreach ($x in @($Extra)) { if ($x) { $childArgs += "'$($x -replace "'", "''")'" } }
+    $title = "serial-monitor $profileName $Port"
+    # The window closes with the monitor (stop-serial-monitor.ps1 included),
+    # except when it dies within 15 s of starting: then it waits so the startup
+    # error can be read instead of vanishing.
+    $cmd = "`$Host.UI.RawUI.WindowTitle = '$title'; `$t0 = Get-Date; & '$PSCommandPath' $($childArgs -join ' '); " +
+        "if (`$LASTEXITCODE -and ((Get-Date) - `$t0).TotalSeconds -lt 15) { Read-Host ('monitor failed to start (exit ' + `$LASTEXITCODE + ') -- Enter closes this window') }"
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    $proc = Start-Process -FilePath 'pwsh' -ArgumentList @('-NoLogo', '-EncodedCommand', $enc) -PassThru
+    Write-Host ("Started in its own window '{0}' (pid {1}). Close it or Ctrl-C there to stop." -f $title, $proc.Id) -ForegroundColor Cyan
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 500
+        try {
+            $st = Invoke-RestMethod -Uri "$base/status" -TimeoutSec 2 -ErrorAction Stop
+            Write-Host ("Ready: {0}  profile={1} port={2} connected={3}" -f $base, $st.profile, $st.port, $st.connected) -ForegroundColor Green
+            exit 0
+        } catch { }
+    }
+    Write-Error "No answer from $base/status after 15 s -- read the error in window '$title'."
     exit 1
 }
 
