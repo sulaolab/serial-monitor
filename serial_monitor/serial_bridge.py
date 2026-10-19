@@ -11,6 +11,7 @@ import threading
 
 import serial
 
+from .board_identity import debugger_next_to
 from .log_writer import LogWriter
 from .traffic_observer import TrafficObserver
 from .tx_gate import TxBlocked, TxGate
@@ -105,6 +106,9 @@ class SerialManager:
         self._notice_listeners: list = []
         self._notice_listeners_lock = threading.Lock()
 
+        self._board: dict | None = None
+        self._board_port: str | None = None
+
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -141,10 +145,25 @@ class SerialManager:
     def connected(self) -> bool:
         return self._connected.is_set()
 
+    def board(self) -> dict | None:
+        """The debugger next to this UART (PKOB4 serial), looked up once per port.
+
+        Two boards of one family share a profile name; this is what tells them
+        apart. ``None`` = not found (not Windows, no debugger on the same hub).
+        """
+        if self._board_port != self.port:
+            try:
+                self._board = debugger_next_to(self.port)
+            except Exception:
+                self._board = None
+            self._board_port = self.port
+        return self._board
+
     def status(self) -> dict:
         return {
             "connected": self.connected,
             "port": self.port,
+            "board": self.board(),
             "baud": self.baud,
             "parity": self.parity,
             "data_bits": self.data_bits,

@@ -278,6 +278,9 @@ if (-not $Quiet -and -not $Json) {
             }
             Write-Host ("  {0}  (http://{1}:{2})" -f $profileLabel, $runningMonitor.HttpHost, $runningMonitor.HttpPort) -ForegroundColor DarkGray
             Write-Host ("    UART {0} @ {1}  [{2}]" -f $heldPort, $status.baud, $conn) -ForegroundColor $connColor
+            if ($status.board -and $status.board.serial) {
+                Write-Host ("    board: {0} {1}" -f $status.board.tool, $status.board.serial) -ForegroundColor DarkGray
+            }
             if ($heldPortMissing) {
                 Write-Host ("    {0} is NOT in the current PnP port list -- the monitor is holding a dead handle." -f $heldPort) -ForegroundColor Red
                 Write-Host "    The board most likely re-enumerated to a different COM number (USB reconnect)." -ForegroundColor Red
@@ -367,6 +370,7 @@ if ($Json) {
             }
             [ordered]@{
                 profile            = [string]$status.profile
+                board_serial       = if ($status.board) { [string]$status.board.serial } else { $null }
                 configured_profile = [string]$runningMonitor.ConfiguredProfile
                 port               = [string]$status.port
                 baud               = if ($null -ne $status.baud) { [int]$status.baud } else { $null }

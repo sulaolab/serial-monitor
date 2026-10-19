@@ -147,6 +147,15 @@ being invisible:
 {"profile": "ck-ev97", "port": "COM41", "connected": true, ...}
 ```
 
+**Two boards of one family share a profile name** (two `ak-curio` monitors both
+say `"profile": "ak-curio"`). `/status` therefore also carries `board`: the
+debugger found on the same USB hub as the UART, e.g.
+`"board": {"tool": "pkob4", "serial": "020085204RYN000318", "via": "same-hub"}`.
+That serial is the one `reset_pkob4 --list` / `flashauto -Serial` take, so match
+the monitor to the board you flash by it. `board: null` means it could not be
+determined (not Windows, no debugger on that hub, or two debuggers on one hub) --
+do not guess then.
+
 Examples below use `127.0.0.1:8080` as a stand-in. Substitute
 `127.0.0.<COM-number>:8080` for the monitor you mean.
 
@@ -414,7 +423,11 @@ Get-PnpDevice -Class Ports | Where-Object Status -eq OK |
     Select-Object FriendlyName, InstanceId    # VID_xxxx & PID_xxxx, per port
 ```
 
-Run it in the background (or a separate terminal) so you can keep issuing HTTP
+**The launcher stays in the foreground for the monitor's whole life** (that is
+what a human's PowerShell window is for). An agent must start it with its shell
+tool's background mode (Claude Code: `run_in_background: true`); a foreground call
+blocks until the tool times out, and stopping that call kills the monitor. Run it
+in the background (or a separate terminal) so you can keep issuing HTTP
 calls, then poll `GET /status` until `connected: true`. If a monitor is **already
 running**, don't start another — the second one fails to bind the port/HTTP and
 exits; just use the running one.
