@@ -53,6 +53,7 @@ Shipped profiles are:
 | `ck-dm33` | DM330030 / dsPIC33CK256MP508 (retiring) |
 | `ck-nano` | dsPIC33CK Curiosity Nano |
 | `samha` | SAM HA1G16A Xplained Pro |
+| `AIS18031` | AIS18031 / ATSAMV71Q21B |
 | `eval92m` / `eval92s` | EVAL92 pair |
 
 The legacy name `sonora` is an unambiguous compatibility alias for `ak-curio`.
