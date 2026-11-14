@@ -28,6 +28,13 @@ from typing import Literal
 
 from .log_writer import LogWriter
 
+# Lines kept in memory for GET /log.  16,384 since 2026-11-15: a board-side capture dump of ~5,730 lines (sonora
+# p26 MEAS, 2048 samples) filled the old 5,000-line ring by itself, so a client reading the telemetry that follows a
+# dump found only the dump.  Sized for a 6,000+ line dump plus telemetry, with headroom.  The full history is
+# always in the log file; this is only the fast in-memory window.  Clients that cap their own request at the
+# ring size must use the same number.
+DEFAULT_RING_SIZE = 16384
+
 
 Direction = Literal["rx", "tx"]
 _MAX_TEXT_PARTIAL = 8192
@@ -71,7 +78,7 @@ class TrafficObserver:
         self,
         *,
         log_writer: LogWriter,
-        ring_size: int = 5000,
+        ring_size: int = DEFAULT_RING_SIZE,
         queue_size: int = 20000,
     ):
         self._log = log_writer
@@ -108,6 +115,8 @@ class TrafficObserver:
             "queued": self._queue.qsize(),
             "dropped": self._dropped,
             "errors": self._errors,
+            # /status exposes it so a client can check the window it relies on (aq caps its tail at this size).
+            "ring_size": self._ring.maxlen,
         }
 
     def start(self) -> None:

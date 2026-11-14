@@ -13,7 +13,7 @@ import serial
 
 from .board_identity import debugger_next_to
 from .log_writer import LogWriter
-from .traffic_observer import TrafficObserver
+from .traffic_observer import DEFAULT_RING_SIZE, TrafficObserver
 from .tx_gate import TxBlocked, TxGate
 
 __all__ = ["SerialManager", "TxBlocked", "PARITY_MAP", "STOPBITS_MAP",
@@ -62,7 +62,7 @@ class SerialManager:
         dtr: bool | None = True,
         rts: bool | None = True,
         log_writer: LogWriter,
-        ring_size: int = 5000,
+        ring_size: int = DEFAULT_RING_SIZE,
         reconnect_interval: float = 1.0,
         max_tx_hold_s: float = 180.0,
     ):
