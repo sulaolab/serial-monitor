@@ -19,6 +19,7 @@ import sys
 import uvicorn
 
 from . import __version__
+from .traffic_observer import DEFAULT_RING_SIZE
 from .api import create_app
 from .config import ConfigError, available_profiles, resolve
 from .log_writer import LogWriter
@@ -127,8 +128,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--ring-size",
         type=int,
-        default=5000,
-        help="In-memory line buffer size for GET /log (default 5000)",
+        default=DEFAULT_RING_SIZE,
+        help=f"In-memory line buffer size for GET /log (default {DEFAULT_RING_SIZE})",
     )
     # --- HTTP ---
     p.add_argument(
