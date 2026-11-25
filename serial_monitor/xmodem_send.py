@@ -1,4 +1,4 @@
-"""XMODEM-CRC sender — drives a firmware image out the monitor's UART.
+"""XMODEM-CRC and single-file YMODEM senders on the monitor's UART.
 
 A board-side receiver of the usual kind is *blocking*: it flushes RX, then drives
 the transfer by emitting 'C' (0x43) until the sender starts sending blocks. This
@@ -158,6 +158,31 @@ def _make_block(seq: int, chunk: bytes, block_size: int) -> bytes:
         bytes([(crc >> 8) & 0xFF, crc & 0xFF])
 
 
+def _send_ymodem_block_zero(
+    mgr: SerialManager,
+    rq: _RawQueue,
+    body: bytes,
+    *,
+    request_data: bool,
+    ack_timeout: float,
+    max_retries: int,
+) -> tuple[str | None, int]:
+    frame = _make_block(0, body.ljust(128, b"\0"), 128)
+    for retries in range(max_retries + 1):
+        mgr.write_binary(frame)
+        response = rq.get(ack_timeout)
+        if response == ACK:
+            if not request_data:
+                return None, retries
+            response = rq.get(ack_timeout)
+            if response == CRCCHR:
+                return None, retries
+        if response == CAN:
+            return "receiver cancelled at YMODEM block 0", retries
+    mgr.write_binary(bytes([CAN, CAN, CAN]))
+    return "no response to YMODEM block 0", max_retries
+
+
 def _xmodem_send_locked(
     mgr: SerialManager,
     data: bytes,
@@ -168,6 +193,7 @@ def _xmodem_send_locked(
     max_retries: int = 10,
     arm_cmd: str | None = None,
     close_gate=None,
+    ymodem_header: bytes | None = None,
 ) -> dict:
     """Send ``data`` to the board over XMODEM-CRC through ``mgr``.
 
@@ -274,6 +300,15 @@ def _xmodem_send_locked(
                  f" in {block}-byte blocks; terminal input is blocked until the"
                  f" transfer ends")
 
+        if ymodem_header is not None:
+            error, control_retries = _send_ymodem_block_zero(
+                mgr, rq, ymodem_header, request_data=True,
+                ack_timeout=ack_timeout, max_retries=max_retries,
+            )
+            retries += control_retries
+            if error:
+                return _fail(mgr, error, blocks_sent, retries, len(data), elapsed())
+
         # --- send data blocks ---------------------------------------------
         seq = 1
         off = 0
@@ -313,16 +348,36 @@ def _xmodem_send_locked(
 
         # --- end of transmission ------------------------------------------
         attempt = 0
+        first_eot_nak = ymodem_header is not None
         while True:
             mgr.write_binary(bytes([EOT]))
             resp = rq.get(timeout=ack_timeout)
             if resp == ACK:
                 break
+            if resp == NAK and first_eot_nak:
+                first_eot_nak = False
+                continue
+            if resp == CAN:
+                return _fail(mgr, "receiver cancelled at EOT",
+                             blocks_sent, retries, len(data), elapsed())
             attempt += 1
             retries += 1
             if attempt > max_retries:
                 return _fail(mgr, "no final ACK for EOT",
                              blocks_sent, retries, len(data), elapsed())
+
+        if ymodem_header is not None:
+            if rq.get(ack_timeout) != CRCCHR:
+                mgr.write_binary(bytes([CAN, CAN, CAN]))
+                return _fail(mgr, "no request for final YMODEM block 0",
+                             blocks_sent, retries, len(data), elapsed())
+            error, control_retries = _send_ymodem_block_zero(
+                mgr, rq, b"", request_data=False,
+                ack_timeout=ack_timeout, max_retries=max_retries,
+            )
+            retries += control_retries
+            if error:
+                return _fail(mgr, error, blocks_sent, retries, len(data), elapsed())
 
         mgr.note(f"[xmodem] done: {blocks_sent} blocks, {retries} retries, "
                  f"{elapsed():.1f}s")
@@ -365,8 +420,19 @@ def xmodem_send(
     if not data:
         raise ValueError("empty image")
 
-    with mgr.tx_gate.transfer(f"xmodem ({len(data)} bytes)") as close_gate:
+    protocol = "ymodem" if kwargs.get("ymodem_header") is not None else "xmodem"
+    with mgr.tx_gate.transfer(f"{protocol} ({len(data)} bytes)") as close_gate:
         return _xmodem_send_locked(mgr, data, close_gate=close_gate, **kwargs)
+
+
+def ymodem_send(mgr: SerialManager, data: bytes, *, filename: str, **kwargs) -> dict:
+    """Send a single file, including its exact byte length in YMODEM block 0."""
+    name = bytes((ord(ch) if 0x20 <= ord(ch) <= 0x7E else ord("_"))
+                 for ch in filename[:96])
+    if not name:
+        raise ValueError("empty YMODEM filename")
+    header = name + b"\0" + str(len(data)).encode("ascii") + b"\0"
+    return xmodem_send(mgr, data, ymodem_header=header, **kwargs)
 
 
 def _fail(mgr: SerialManager, msg: str, blocks: int, retries: int,

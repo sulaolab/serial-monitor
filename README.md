@@ -223,6 +223,7 @@ somebody made rather than a warning that scrolled past.
 | `POST` | `/wait` `{contains,timeout}` | block until a marker appears in RX; matches only what arrives **after** the call |
 | `GET` | `/log?tail=N` | recent RX/TX lines |
 | `POST` | `/xmodem_send` `{path,arm_cmd,…}` | push a host file to the board's XMODEM receiver |
+| `POST` | `/ymodem_send` `{path,arm_cmd,…}` | send one host file with its filename and exact size to a YMODEM receiver |
 
 `/command` then `/wait` is not a working sequence and never was: a console that
 answers in milliseconds has replied before a second HTTP request can be served,
@@ -272,7 +273,7 @@ before sending a command.
 
 ## Security
 
-The API is **unauthenticated by design** and `/xmodem_send` reads any path on the
+The API is **unauthenticated by design** and both file-send endpoints read any path on the
 host, which is safe only on the loopback binds it defaults to. Supported
 configurations, what is deliberately not a vulnerability, and how to report one
 privately: [`SECURITY.md`](SECURITY.md).

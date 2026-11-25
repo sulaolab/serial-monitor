@@ -5,7 +5,7 @@ import threading
 import pytest
 
 from ..tx_gate import TxBlocked, TxGate, TxGateBusy
-from ..xmodem_send import CAN, _RawQueue, _wait_for_crc_handshake, xmodem_send
+from ..xmodem_send import CAN, _RawQueue, _wait_for_crc_handshake, crc16_ccitt, xmodem_send, ymodem_send
 
 
 def test_handshake_ignores_c_in_reset_text() -> None:
@@ -34,6 +34,52 @@ class GateOnlyMgr:
 
     def note(self, text: str):
         self.notes.append(text)
+
+
+def test_ymodem_exact_length_retries_and_batch_end():
+    data = b":00000001FF\r\n"
+
+    class Receiver(GateOnlyMgr):
+        def __init__(self):
+            super().__init__()
+            self.writes = []
+
+        def add_raw_listener(self, listener):
+            self.listener = listener
+
+        def note(self, text):
+            super().note(text)
+            if "waiting up to " in text:
+                self.listener(b"C")
+
+        def remove_raw_listener(self, listener):
+            assert self.listener is listener
+            self.listener = None
+
+        def write_binary(self, frame):
+            assert _ordinary_write_refused(self.tx_gate)
+            self.writes.append(frame)
+            if frame != b"\x04":
+                assert frame[0] == 1
+                assert frame[1] ^ frame[2] == 255
+                assert crc16_ccitt(frame[3:-2]) == int.from_bytes(frame[-2:], "big")
+            responses = (b"\x06C", b"\x15", b"\x06", b"\x15", b"\x06C", b"\x06")
+            self.listener(responses[len(self.writes) - 1])
+
+    receiver = Receiver()
+    result = ymodem_send(receiver, data, filename="app\x1b.hex", block=128)
+    assert result["ok"]
+    assert result["bytes"] == len(data)
+    assert result["blocks"] == 1
+    assert result["retries"] == 1
+    header, first_data, retry, eot, eot_again, final = receiver.writes
+    assert header[1] == 0
+    assert header[3:-2].split(b"\0")[:2] == [b"app_.hex", str(len(data)).encode()]
+    assert first_data == retry and first_data[1] == 1
+    assert first_data[3:3 + len(data)] == data
+    assert eot == eot_again == b"\x04"
+    assert final[1] == 0 and final[3:-2] == bytes(128)
+    assert receiver.listener is None and not _ordinary_write_refused(receiver.tx_gate)
 
 
 def test_bad_arguments_are_rejected_without_touching_the_gate() -> None:

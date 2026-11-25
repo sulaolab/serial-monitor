@@ -8,6 +8,7 @@ Endpoints (all JSON):
     POST /command_wait {cmd,contains,timeout}
                                    -> send and match, matcher armed first
     POST /xmodem_send {path,...}   -> send a host file to the board over XMODEM
+    POST /ymodem_send {path,...}   -> send one host file over YMODEM
 
 /command followed by /wait is NOT reliable and never was: /wait only matches bytes
 observed after it is called, and a console that answers in milliseconds has
@@ -18,7 +19,8 @@ output the board emits on its own (or arm it before you send from another client
 SECURITY: there is NO authentication, by design -- the API is meant to be bound
 to loopback only (the ``--http-host`` default is 127.0.0.1). Two endpoints are
 worth being explicit about: ``/command`` drives the connected board, and
-``/xmodem_send`` reads an ARBITRARY path on the monitor host and streams it out.
+``/xmodem_send`` and ``/ymodem_send`` read an ARBITRARY path on the monitor
+host and stream it out.
 Binding to anything but a loopback address therefore publishes an unauthenticated
 board-control and host-file-read surface to whoever can reach that address; do
 not do it on a shared corporate network. cli.py refuses such a bind outright
@@ -46,7 +48,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .serial_bridge import SerialManager
 from .tx_gate import TxBlocked, TxGateBusy
-from .xmodem_send import xmodem_send
+from .xmodem_send import xmodem_send, ymodem_send
 
 
 class CommandIn(BaseModel):
@@ -250,9 +252,8 @@ def create_app(
             "line": matched,
         }
 
-    @app.post("/xmodem_send")
-    def xmodem_send_ep(body: XmodemSendIn):
-        """Send a firmware image to the board over XMODEM-CRC.
+    def send_file(body: XmodemSendIn, *, ymodem: bool):
+        """Send a firmware file through the monitor-owned port.
 
         ``path`` is read from the monitor host's filesystem with no confinement to
         a root directory -- safe only because the API is loopback-bound and
@@ -270,7 +271,8 @@ def create_app(
         if not os.path.isfile(body.path):
             raise HTTPException(status_code=400, detail=f"no such file: {body.path}")
         try:
-            data = open(body.path, "rb").read()
+            with open(body.path, "rb") as image:
+                data = image.read()
         except OSError as exc:
             raise HTTPException(status_code=400, detail=f"read failed: {exc}")
 
@@ -281,13 +283,16 @@ def create_app(
         handle = mgr.arm_wait(body.result_marker) if body.result_marker else None
 
         try:
-            res = xmodem_send(
+            sender = ymodem_send if ymodem else xmodem_send
+            metadata = {"filename": os.path.basename(body.path)} if ymodem else {}
+            res = sender(
                 mgr,
                 data,
                 block=body.block,
                 handshake_timeout=body.handshake_timeout,
                 ack_timeout=body.ack_timeout,
                 arm_cmd=body.arm_cmd,
+                **metadata,
             )
         except TxGateBusy as exc:
             # Two transfers at once would interleave frames and fail both.
@@ -305,5 +310,15 @@ def create_app(
             res["result_line"] = mgr.wait_armed(handle, body.result_timeout)
 
         return res
+
+    @app.post("/xmodem_send")
+    def xmodem_send_ep(body: XmodemSendIn):
+        """Send a firmware image to the board over XMODEM-CRC."""
+        return send_file(body, ymodem=False)
+
+    @app.post("/ymodem_send")
+    def ymodem_send_ep(body: XmodemSendIn):
+        """Send one file over YMODEM and optionally wait for its result marker."""
+        return send_file(body, ymodem=True)
 
     return app
